@@ -1,0 +1,11 @@
+# 依赖与临时目录
+node_modules/
+.pdfwork/
+
+# 下载的临时文件
+*.pdf
+*.log
+
+# 系统文件
+Thumbs.db
+.DS_Store
