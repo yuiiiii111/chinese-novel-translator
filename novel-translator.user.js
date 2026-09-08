@@ -1,9 +1,17 @@
 // ==UserScript==
 // @name         小说翻译助手
-// @namespace    https://github.com/novel-translator
-// @version      0.1.0
-// @description  在支持的小说网站中翻译章节正文
-// @match        *://*/*
+// @name:en      Novel Translator
+// @namespace    https://github.com/yuiiiii111/Git
+// @version      0.2.0
+// @description  在起点中文网、晋江文学城、番茄小说等章节页一键翻译正文，支持 Google 翻译与 OpenAI 兼容 API，自动缓存译文，可逐段对照或仅看译文。
+// @description:en Translate Chinese novel chapters on Qidian, Jinjiang and Fanqie. Google Translate & OpenAI-compatible APIs, per-chapter cache, side-by-side or translations-only view.
+// @author       yuiiiii111
+// @homepageURL  https://github.com/yuiiiii111/Git
+// @supportURL   https://github.com/yuiiiii111/Git/issues
+// @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232e9d57'/%3E%3Ctext x='16' y='22.5' font-size='17' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E8%AF%91%3C/text%3E%3C/svg%3E
+// @match        *://*.qidian.com/*
+// @match        *://*.jjwxc.net/*
+// @match        *://*.fanqienovel.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -17,19 +25,28 @@
 (function () {
     'use strict';
 
+    const SCRIPT_VERSION = '0.2.0';
+
     const DEFAULT_SETTINGS = {
         engine: 'google',
         targetLang: 'en',
         apiUrl: 'https://api.openai.com/v1/chat/completions',
         apiKey: '',
-        model: 'gpt-3.5-turbo'
+        model: 'gpt-3.5-turbo',
+        displayMode: 'inline',
+        autoNext: false
     };
 
     const UI_IDS = {
         root: 'novel-translator-ui',
+        bar: 'novel-translator-bar',
+        dragHandle: 'novel-translator-drag-handle',
         translateButton: 'novel-translator-button',
+        toggleButton: 'novel-translator-toggle-button',
         settingsButton: 'novel-translator-settings-button',
-        modal: 'novel-translator-settings-modal'
+        miniButton: 'novel-translator-mini-button',
+        modal: 'novel-translator-settings-modal',
+        toast: 'novel-translator-toast'
     };
 
     const adapters = [
@@ -50,6 +67,10 @@
             },
             getContainer() {
                 return document.querySelector('.read-content');
+            },
+            getNextUrl() {
+                const next = document.querySelector('a#j_chapterNext, a.j_chapterNext, a[href*="/chapter/"].next');
+                return next && next.href ? next.href : null;
             }
         },
         {
@@ -72,7 +93,8 @@
             },
             getContainer() {
                 return document.querySelector('.noveltext');
-            }
+            },
+            getNextUrl: null
         },
         {
             name: '番茄小说',
@@ -91,9 +113,31 @@
             },
             getContainer() {
                 return document.querySelector('.page-content');
-            }
+            },
+            getNextUrl: null
         }
     ];
+
+    const LANGUAGE_LABELS = {
+        en: '英语 English',
+        ja: '日语 日本語',
+        ko: '韩语 한국어',
+        ru: '俄语 Русский',
+        fr: '法语 Français',
+        de: '德语 Deutsch',
+        es: '西班牙语 Español',
+        zh: '简体中文',
+        'zh-CN': '简体中文',
+        'zh-TW': '繁体中文',
+        ar: '阿拉伯语',
+        pt: '葡萄牙语',
+        vi: '越南语',
+        th: '泰语'
+    };
+
+    let session = null;
+
+    // ---------------- 基础工具 ----------------
 
     function cleanText(value) {
         return String(value || '')
@@ -102,9 +146,18 @@
             .trim();
     }
 
+    function delay(milliseconds) {
+        return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    }
+
     function getMatchedAdapter() {
         const url = window.location.href;
         return adapters.find((adapter) => adapter.match.test(url)) || null;
+    }
+
+    function languageName(code) {
+        const key = String(code || '').trim();
+        return LANGUAGE_LABELS[key] || key;
     }
 
     function getSettings() {
@@ -115,6 +168,8 @@
             settings.apiUrl = String(settings.apiUrl || '').trim() || DEFAULT_SETTINGS.apiUrl;
             settings.model = String(settings.model || '').trim() || DEFAULT_SETTINGS.model;
             settings.apiKey = String(settings.apiKey || '').trim();
+            settings.displayMode = settings.displayMode === 'translations-only' ? 'translations-only' : 'inline';
+            settings.autoNext = Boolean(settings.autoNext);
             return settings;
         } catch (error) {
             logError('读取设置失败', error);
@@ -129,6 +184,10 @@
             mergedSettings.apiUrl = String(mergedSettings.apiUrl || '').trim() || DEFAULT_SETTINGS.apiUrl;
             mergedSettings.model = String(mergedSettings.model || '').trim() || DEFAULT_SETTINGS.model;
             mergedSettings.apiKey = String(mergedSettings.apiKey || '').trim();
+            mergedSettings.displayMode = settings && settings.displayMode === 'translations-only'
+                ? 'translations-only'
+                : 'inline';
+            mergedSettings.autoNext = Boolean(settings && settings.autoNext);
             GM_setValue('settings', mergedSettings);
             return true;
         } catch (error) {
@@ -145,6 +204,34 @@
             console.error(`[小说翻译助手] ${message}${detail}`, error);
         }
     }
+
+    // ---------------- Toast（替代 window.alert） ----------------
+
+    let toastTimer = null;
+
+    function showToast(message, type, duration) {
+        const kind = ['success', 'error', 'info'].includes(type) ? type : 'info';
+        const wait = typeof duration === 'number' ? duration : (kind === 'error' ? 5000 : 3200);
+        let toast = document.getElementById(UI_IDS.toast);
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = UI_IDS.toast;
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.className = `novel-translator-toast novel-translator-toast-${kind}`;
+        toast.classList.add('novel-translator-toast-show');
+        if (toastTimer) {
+            window.clearTimeout(toastTimer);
+        }
+        toastTimer = window.setTimeout(() => {
+            toast.classList.remove('novel-translator-toast-show');
+        }, wait);
+    }
+
+    // ---------------- 网络请求与翻译引擎 ----------------
 
     function gmRequest(details) {
         return new Promise((resolve, reject) => {
@@ -234,7 +321,7 @@
                 messages: [
                     {
                         role: 'user',
-                        content: `请将以下内容翻译成${targetLang}，只返回译文：\n${text}`
+                        content: `请将以下内容翻译成${languageName(targetLang)}，只返回译文：\n${text}`
                     }
                 ]
             }),
@@ -285,30 +372,36 @@
         return null;
     }
 
-    async function translateWithConcurrency(texts, targetLang, settings, batchSize = 5) {
+    async function translateWithConcurrency(texts, targetLang, settings, batchSize, onProgress) {
         const translations = [];
+        let doneCount = 0;
         for (let start = 0; start < texts.length; start += batchSize) {
             const batch = texts.slice(start, start + batchSize);
             const batchTranslations = await Promise.all(
                 batch.map((text) => translateText(text, targetLang, settings))
             );
             translations.push(...batchTranslations);
+            doneCount += batchTranslations.length;
+            if (typeof onProgress === 'function') {
+                onProgress(doneCount, texts.length);
+            }
         }
         return translations;
     }
 
-    function delay(milliseconds) {
-        return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-    }
+    // ---------------- 章节内容提取与缓存 ----------------
 
-    async function extractContentWithRetry(adapter, maxRetries = 3, interval = 500) {
+    async function extractContentWithRetry(adapter, maxRetries, interval) {
+        const retries = maxRetries === undefined ? 3 : maxRetries;
+        const waitMs = interval === undefined ? 500 : interval;
+
         if (document.readyState === 'loading') {
             await new Promise((resolve) => {
                 document.addEventListener('DOMContentLoaded', resolve, { once: true });
             });
         }
 
-        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        for (let attempt = 0; attempt <= retries; attempt += 1) {
             const container = adapter.getContainer();
             const segments = container ? adapter.getContent() : [];
 
@@ -316,8 +409,8 @@
                 return { container, segments };
             }
 
-            if (attempt < maxRetries) {
-                await delay(interval);
+            if (attempt < retries) {
+                await delay(waitMs);
             }
         }
 
@@ -372,34 +465,178 @@
         }
     }
 
+    // ---------------- 译文渲染 ----------------
+
     function clearTranslation() {
-        document.querySelectorAll('.novel-translation').forEach((node) => node.remove());
+        document.querySelectorAll('.novel-translation, .novel-translation-block').forEach((node) => node.remove());
+        document.querySelectorAll('.nt-hidden-source').forEach((node) => node.classList.remove('nt-hidden-source'));
+        session = null;
+        const root = document.getElementById(UI_IDS.root);
+        if (root) {
+            root.dataset.tlVisible = '1';
+            const toggleButton = document.getElementById(UI_IDS.toggleButton);
+            if (toggleButton) {
+                toggleButton.disabled = true;
+                toggleButton.textContent = '🙈';
+                toggleButton.title = '暂无译文可切换';
+            }
+        }
     }
 
-    function createTranslationNode(text) {
+    function createTranslationNode(text, failed) {
         const node = document.createElement('div');
-        node.className = 'novel-translation';
-        node.textContent = text;
+        node.className = failed
+            ? 'novel-translation novel-translation-failed'
+            : 'novel-translation';
+        if (failed) {
+            node.textContent = '翻译失败，点击此处重试';
+            node.title = '点击重新翻译这一段';
+        } else {
+            node.textContent = text;
+        }
         return node;
     }
 
-    function displayTranslation(segments, translations, container) {
+    function renderTranslations(sessionData, translations) {
+        const { segments, container } = sessionData;
+        const mode = sessionData.settings.displayMode === 'translations-only' ? 'translations-only' : 'inline';
         const hasElements = segments.some((segment) => segment.element && segment.element.nodeType === 1);
+
         if (hasElements) {
             segments.forEach((segment, index) => {
                 if (!segment.element || segment.element.nodeType !== 1) {
                     return;
                 }
-                const node = createTranslationNode(translations[index] || '翻译失败，请重试');
+                const success = typeof translations[index] === 'string' && translations[index];
+                const node = createTranslationNode(translations[index], !success);
+                if (!success) {
+                    node.addEventListener('click', () => retrySegment(sessionData, index, node));
+                }
+                if (mode === 'translations-only') {
+                    segment.element.classList.add('nt-hidden-source');
+                }
                 segment.element.insertAdjacentElement('afterend', node);
             });
             return;
         }
 
+        // 无独立段落元素的站点（晋江等）
+        if (mode === 'translations-only') {
+            container.classList.add('nt-hidden-source');
+            const block = document.createElement('div');
+            block.className = 'novel-translation-block';
+            translations.forEach((translation, index) => {
+                const success = typeof translation === 'string' && translation;
+                const node = createTranslationNode(translation, !success);
+                if (!success) {
+                    node.addEventListener('click', () => retrySegment(sessionData, index, node));
+                }
+                block.appendChild(node);
+            });
+            container.parentNode.insertBefore(block, container);
+            return;
+        }
+
         const fragment = document.createDocumentFragment();
-        translations.forEach((translation) => fragment.appendChild(createTranslationNode(translation || '翻译失败，请重试')));
+        translations.forEach((translation, index) => {
+            const success = typeof translation === 'string' && translation;
+            const node = createTranslationNode(translation, !success);
+            if (!success) {
+                node.addEventListener('click', () => retrySegment(sessionData, index, node));
+            }
+            fragment.appendChild(node);
+        });
         container.appendChild(fragment);
     }
+
+    async function retrySegment(sessionData, index, node) {
+        if (!sessionData || !node || node.dataset.retrying === '1') {
+            return;
+        }
+        const source = sessionData.sourceTexts[index];
+        if (typeof source !== 'string' || !source) {
+            return;
+        }
+        node.dataset.retrying = '1';
+        node.classList.remove('novel-translation-failed');
+        node.textContent = '⟳ 重试中…';
+        try {
+            const translation = await translateText(source, sessionData.settings.targetLang, sessionData.settings);
+            if (typeof translation === 'string' && translation) {
+                node.textContent = translation;
+                sessionData.translations[index] = translation;
+                writeCache(sessionData.sourceTexts, sessionData.translations, sessionData.settings);
+                showToast('该段已重新翻译', 'success', 2000);
+            } else {
+                node.textContent = '翻译失败，点击此处重试';
+                node.classList.add('novel-translation-failed');
+                showToast('重试失败，请检查网络或设置', 'error', 3000);
+            }
+        } catch (error) {
+            node.textContent = '翻译失败，点击此处重试';
+            node.classList.add('novel-translation-failed');
+            showToast(`重试出错：${error.message || '未知错误'}`, 'error', 4000);
+        } finally {
+            delete node.dataset.retrying;
+        }
+    }
+
+    // ---------------- 悬浮按钮状态 ----------------
+
+    const DEFAULT_BUTTON_LABEL = '🌐 翻译本章';
+
+    function setButtonState(button, label, disabled) {
+        button.textContent = label;
+        button.disabled = disabled;
+        button.setAttribute('aria-busy', disabled ? 'true' : 'false');
+    }
+
+    function resetButtonAfter(button, doneLabel, delayMs) {
+        window.setTimeout(() => {
+            if (button.textContent === doneLabel) {
+                setButtonState(button, DEFAULT_BUTTON_LABEL, false);
+            }
+        }, delayMs);
+    }
+
+    function applyTranslationVisibility() {
+        const root = document.getElementById(UI_IDS.root);
+        const toggleButton = document.getElementById(UI_IDS.toggleButton);
+        if (!root || !toggleButton) {
+            return;
+        }
+        const visible = root.dataset.tlVisible !== '0';
+        const nodes = document.querySelectorAll('.novel-translation, .novel-translation-block');
+        nodes.forEach((node) => {
+            node.style.display = visible ? '' : 'none';
+        });
+        toggleButton.textContent = visible ? '🙈' : '👁';
+        toggleButton.title = visible ? '隐藏译文（Alt+H）' : '显示译文（Alt+H）';
+        toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    }
+
+    function syncToggleState() {
+        const toggleButton = document.getElementById(UI_IDS.toggleButton);
+        if (!toggleButton) {
+            return;
+        }
+        const anyTranslation = document.querySelectorAll('.novel-translation, .novel-translation-block').length > 0;
+        toggleButton.disabled = !anyTranslation;
+        if (anyTranslation) {
+            applyTranslationVisibility();
+        }
+    }
+
+    function toggleTranslationVisibility() {
+        const root = document.getElementById(UI_IDS.root);
+        if (!root) {
+            return;
+        }
+        root.dataset.tlVisible = root.dataset.tlVisible === '1' ? '0' : '1';
+        applyTranslationVisibility();
+    }
+
+    // ---------------- 章节翻译主流程 ----------------
 
     async function translateChapter(button) {
         const adapter = getMatchedAdapter();
@@ -408,30 +645,43 @@
         }
 
         clearTranslation();
-        setButtonState(button, '翻译中...', true);
+        setButtonState(button, '⏳ 准备中…', true);
 
         const settings = getSettings();
         if (settings.engine === 'llm' && !settings.apiKey) {
-            setButtonState(button, '翻译本章', false);
-            window.alert('请先在设置中填写 API Key');
+            setButtonState(button, DEFAULT_BUTTON_LABEL, false);
+            showToast('请先在设置中填写 API Key', 'error');
             return;
         }
 
+        const startedAt = Date.now();
         try {
             const { container, segments } = await extractContentWithRetry(adapter, 3, 500);
             if (!container || !segments.length) {
-                setButtonState(button, '翻译本章', false);
-                window.alert('无法提取正文内容');
+                setButtonState(button, DEFAULT_BUTTON_LABEL, false);
+                showToast('无法提取正文内容，页面结构可能已改版', 'error');
                 return;
             }
 
             const sourceTexts = segments.map((segment) => segment.text);
+            const total = sourceTexts.length;
             let translations = readCache(sourceTexts, settings);
+            let usedCache = Boolean(translations);
+
             if (!translations) {
-                translations = await translateWithConcurrency(sourceTexts, settings.targetLang, settings, 5);
+                setButtonState(button, `⏳ 翻译中 (0/${total})`, true);
+                translations = await translateWithConcurrency(
+                    sourceTexts,
+                    settings.targetLang,
+                    settings,
+                    5,
+                    (done, all) => {
+                        setButtonState(button, `⏳ 翻译中 (${done}/${all})`, true);
+                    }
+                );
                 if (translations.length > 0 && translations.every((translation) => !translation)) {
-                    setButtonState(button, '翻译本章', false);
-                    window.alert('翻译失败，请检查设置或网络');
+                    setButtonState(button, DEFAULT_BUTTON_LABEL, false);
+                    showToast('翻译失败，请检查设置或网络', 'error');
                     return;
                 }
                 if (translations.every((translation) => typeof translation === 'string' && translation)) {
@@ -439,20 +689,124 @@
                 }
             }
 
-            displayTranslation(segments, translations, container);
-            setButtonState(button, '翻译完成', false);
+            session = {
+                container,
+                segments,
+                sourceTexts,
+                translations,
+                settings
+            };
+            renderTranslations(session, translations);
+
+            const successCount = translations.filter((translation) => typeof translation === 'string' && translation).length;
+            const failedCount = total - successCount;
+            const elapsed = Math.round((Date.now() - startedAt) / 1000);
+            const doneLabel = failedCount > 0
+                ? `✓ ${successCount}/${total} 段（${failedCount} 段失败）`
+                : `✓ 已翻译 ${total} 段`;
+
+            setButtonState(button, doneLabel, false);
+            resetButtonAfter(button, doneLabel, 2600);
+            syncToggleState();
+
+            if (failedCount > 0) {
+                showToast(`${failedCount} 段翻译失败，点击红色译文可单独重试`, 'error', 4000);
+            } else if (usedCache) {
+                showToast(`已从缓存加载译文（共 ${total} 段，${elapsed} 秒内显示）`, 'info', 2400);
+            } else {
+                showToast(`翻译完成：${total} 段，用时 ${elapsed} 秒`, 'success', 2600);
+            }
+
+            scheduleAutoNext(adapter, settings);
         } catch (error) {
             logError('翻译章节失败', error);
             setButtonState(button, '翻译失败，重试', false);
-            window.alert(`翻译失败：${error.message || '未知错误'}`);
+            resetButtonAfter(button, '翻译失败，重试', 3000);
+            showToast(`翻译失败：${error.message || '未知错误'}`, 'error', 5000);
         }
     }
 
-    function setButtonState(button, label, disabled) {
-        button.textContent = label;
-        button.disabled = disabled;
-        button.setAttribute('aria-busy', disabled ? 'true' : 'false');
+    // ---------------- 自动翻译下一章（可选，默认关闭） ----------------
+
+    function scheduleAutoNext(adapter, settings) {
+        if (!settings.autoNext || !adapter || typeof adapter.getNextUrl !== 'function') {
+            return;
+        }
+        let nextUrl = null;
+        try {
+            nextUrl = adapter.getNextUrl();
+        } catch (error) {
+            logError('查找下一章链接失败', error);
+        }
+        if (!nextUrl) {
+            showToast('已开启自动翻译，但本章没有找到下一章链接', 'info', 3000);
+            return;
+        }
+        showToast('即将自动跳转到下一章并继续翻译…', 'info', 1600);
+        window.setTimeout(() => {
+            // 跳转前复查：用户可能在这 2 秒内关闭了自动翻译
+            let latestSettings;
+            try {
+                latestSettings = getSettings();
+            } catch (error) {
+                latestSettings = settings;
+            }
+            if (!latestSettings.autoNext) {
+                return;
+            }
+            try {
+                GM_setValue('autoTarget', nextUrl);
+            } catch (error) {
+                logError('保存自动翻译目标失败', error);
+            }
+            window.location.href = nextUrl;
+        }, 2000);
     }
+
+    function handleAutoContinue() {
+        let target = null;
+        try {
+            target = GM_getValue('autoTarget', null);
+        } catch (error) {
+            logError('读取自动翻译目标失败', error);
+        }
+        if (!target) {
+            return;
+        }
+        try {
+            GM_setValue('autoTarget', null);
+        } catch (error) {
+            logError('清除自动翻译目标失败', error);
+        }
+        if (target !== window.location.href) {
+            return;
+        }
+        window.setTimeout(() => {
+            const button = document.getElementById(UI_IDS.translateButton);
+            if (button) {
+                translateChapter(button);
+            }
+        }, 800);
+    }
+
+    function clearStaleAutoTarget() {
+        let target = null;
+        try {
+            target = GM_getValue('autoTarget', null);
+        } catch (error) {
+            logError('读取自动翻译目标失败', error);
+        }
+        if (!target) {
+            return;
+        }
+        try {
+            GM_setValue('autoTarget', null);
+        } catch (error) {
+            logError('清除自动翻译目标失败', error);
+        }
+    }
+
+    // ---------------- 样式 ----------------
 
     function injectStyles() {
         if (document.getElementById('novel-translator-styles')) {
@@ -461,45 +815,124 @@
         const style = document.createElement('style');
         style.id = 'novel-translator-styles';
         style.textContent = `
+            /* ===== 悬浮工具栏 ===== */
             #${UI_IDS.root} {
                 position: fixed;
                 right: 20px;
                 bottom: 20px;
-                z-index: 2147483646;
+                z-index: 2147483644;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+                user-select: none;
+            }
+            #${UI_IDS.root} .nt-bar {
                 display: flex;
-                gap: 8px;
                 align-items: center;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                gap: 4px;
+                padding: 5px 8px 5px 4px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, .9);
+                -webkit-backdrop-filter: blur(10px);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(0, 0, 0, .08);
+                box-shadow: 0 6px 22px rgba(0, 0, 0, .18);
+                transition: opacity .18s ease;
             }
             #${UI_IDS.root} button {
                 border: 0;
-                border-radius: 6px;
-                box-shadow: 0 2px 10px rgba(0, 0, 0, .2);
                 cursor: pointer;
-                font-size: 14px;
-                line-height: 1.4;
-                transition: opacity .2s ease, transform .2s ease;
+                font-family: inherit;
+                transition: background .15s ease, transform .15s ease, opacity .2s ease;
             }
-            #${UI_IDS.root} button:hover:not(:disabled) {
-                transform: translateY(-1px);
+            #${UI_IDS.root} button:focus-visible {
+                outline: 2px solid #2e9d57;
+                outline-offset: 1px;
+            }
+            #${UI_IDS.root} .nt-btn {
+                height: 36px;
+                padding: 0 13px;
+                border-radius: 999px;
+                background: transparent;
+                color: #333;
+                font-size: 14px;
+                line-height: 1;
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                white-space: nowrap;
+            }
+            #${UI_IDS.root} .nt-btn:hover:not(:disabled) {
+                background: rgba(0, 0, 0, .06);
+            }
+            #${UI_IDS.root} .nt-btn:disabled {
+                cursor: wait;
+                opacity: .55;
+            }
+            #${UI_IDS.root} .nt-icon-btn {
+                width: 36px;
+                height: 36px;
+                padding: 0;
+                border-radius: 50%;
+                background: transparent;
+                color: #333;
+                font-size: 17px;
+                line-height: 1;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 auto;
+            }
+            #${UI_IDS.root} .nt-icon-btn:hover:not(:disabled) {
+                background: rgba(0, 0, 0, .06);
+            }
+            #${UI_IDS.root} .nt-icon-btn:disabled {
+                cursor: default;
+                opacity: .4;
+            }
+            #${UI_IDS.dragHandle} {
+                cursor: grab;
+                color: #9aa0a6;
+                font-size: 14px;
+                touch-action: none;
+            }
+            #${UI_IDS.dragHandle}:active {
+                cursor: grabbing;
             }
             #${UI_IDS.translateButton} {
-                padding: 10px 14px;
-                color: #fff;
                 background: #2e9d57;
+                color: #fff;
+                font-weight: 600;
+            }
+            #${UI_IDS.translateButton}:hover:not(:disabled) {
+                background: #278a4c;
+                transform: translateY(-1px);
             }
             #${UI_IDS.translateButton}:disabled {
-                cursor: wait;
-                opacity: .7;
+                background: #2e9d57;
             }
             #${UI_IDS.settingsButton} {
-                width: 38px;
-                height: 38px;
-                padding: 0;
-                color: #fff;
-                background: #4b7f5c;
-                font-size: 20px;
+                color: #555;
             }
+            #${UI_IDS.miniButton} {
+                display: none;
+                width: 46px;
+                height: 46px;
+                border-radius: 50%;
+                background: #2e9d57;
+                color: #fff;
+                font-size: 17px;
+                font-weight: 700;
+                box-shadow: 0 6px 22px rgba(46, 157, 87, .45);
+            }
+            #${UI_IDS.root}.nt-collapsed .nt-bar {
+                display: none;
+            }
+            #${UI_IDS.root}.nt-collapsed #${UI_IDS.miniButton} {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            /* ===== 译文 ===== */
             .novel-translation {
                 box-sizing: border-box;
                 margin: 8px 0 14px;
@@ -507,73 +940,277 @@
                 border-left: 3px solid #2e9d57;
                 color: #666;
                 line-height: 1.8;
+                animation: novel-translation-in .22s ease;
+                word-break: break-word;
             }
+            .novel-translation-block {
+                margin: 12px 0;
+                animation: novel-translation-in .22s ease;
+            }
+            .novel-translation-failed {
+                border-left-color: #d9534f;
+                color: #d9534f !important;
+                cursor: pointer;
+                font-style: italic;
+            }
+            .novel-translation-failed:hover {
+                opacity: .75;
+            }
+            .nt-hidden-source {
+                display: none !important;
+            }
+            @keyframes novel-translation-in {
+                from { opacity: 0; transform: translateY(3px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+
+            /* ===== 设置弹窗 ===== */
             #${UI_IDS.modal} {
                 position: fixed;
                 inset: 0;
-                z-index: 2147483647;
+                z-index: 2147483645;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 background: rgba(0, 0, 0, .45);
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            }
+            #${UI_IDS.modal}[hidden] {
+                display: none;
             }
             #${UI_IDS.modal} .novel-translator-dialog {
-                width: min(460px, calc(100vw - 32px));
+                width: min(470px, calc(100vw - 32px));
                 box-sizing: border-box;
-                padding: 22px;
-                border-radius: 8px;
+                padding: 24px;
+                border-radius: 12px;
                 background: #fff;
                 color: #222;
-                box-shadow: 0 8px 30px rgba(0, 0, 0, .25);
+                box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
+                max-height: calc(100vh - 48px);
+                overflow-y: auto;
             }
             #${UI_IDS.modal} h2 {
-                margin: 0 0 18px;
+                margin: 0 0 4px;
                 font-size: 19px;
             }
-            #${UI_IDS.modal} label {
+            #${UI_IDS.modal} .novel-translator-subtitle {
+                margin: 0 0 14px;
+                color: #888;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            #${UI_IDS.modal} label.novel-translator-label {
                 display: block;
-                margin: 12px 0 6px;
+                margin: 14px 0 6px;
                 font-size: 13px;
                 font-weight: 600;
             }
-            #${UI_IDS.modal} input,
+            #${UI_IDS.modal} input[type="text"],
+            #${UI_IDS.modal} input[type="url"],
+            #${UI_IDS.modal} input[type="password"],
             #${UI_IDS.modal} select {
                 width: 100%;
                 box-sizing: border-box;
-                padding: 8px 10px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
+                padding: 9px 11px;
+                border: 1px solid #d4d7dc;
+                border-radius: 8px;
                 font-size: 14px;
+                background: #fff;
+                color: inherit;
+                outline: none;
+                transition: border-color .15s ease, box-shadow .15s ease;
+            }
+            #${UI_IDS.modal} input:focus,
+            #${UI_IDS.modal} select:focus {
+                border-color: #2e9d57;
+                box-shadow: 0 0 0 3px rgba(46, 157, 87, .14);
+            }
+            #${UI_IDS.modal} .novel-translator-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            #${UI_IDS.modal} .novel-translator-row input {
+                flex: 1;
+            }
+            #${UI_IDS.modal} .novel-translator-password-wrap {
+                position: relative;
+            }
+            #${UI_IDS.modal} .novel-translator-password-wrap input {
+                padding-right: 42px;
+            }
+            #${UI_IDS.modal} .novel-translator-key-toggle {
+                position: absolute;
+                top: 50%;
+                right: 6px;
+                transform: translateY(-50%);
+                width: 30px;
+                height: 30px;
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                cursor: pointer;
+                font-size: 14px;
+                line-height: 1;
+            }
+            #${UI_IDS.modal} .novel-translator-key-toggle:hover {
+                background: rgba(0, 0, 0, .06);
+            }
+            #${UI_IDS.modal} .novel-translator-check {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin: 14px 0 2px;
+                font-size: 14px;
+                cursor: pointer;
+            }
+            #${UI_IDS.modal} .novel-translator-check input {
+                width: auto;
+                accent-color: #2e9d57;
             }
             #${UI_IDS.modal} .novel-translator-llm-fields {
-                margin-top: 4px;
+                margin-top: 2px;
             }
             #${UI_IDS.modal} .novel-translator-actions {
                 display: flex;
                 justify-content: flex-end;
                 gap: 8px;
-                margin-top: 22px;
+                margin-top: 24px;
             }
             #${UI_IDS.modal} .novel-translator-actions button {
-                padding: 8px 14px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
+                padding: 9px 18px;
+                border: 1px solid #d4d7dc;
+                border-radius: 8px;
                 cursor: pointer;
+                font-size: 14px;
+                background: #fff;
+                color: #333;
+                transition: background .15s ease;
+            }
+            #${UI_IDS.modal} .novel-translator-actions button:hover {
+                background: rgba(0, 0, 0, .05);
             }
             #${UI_IDS.modal} .novel-translator-save {
                 border-color: #2e9d57 !important;
-                color: #fff;
-                background: #2e9d57;
+                color: #fff !important;
+                background: #2e9d57 !important;
+            }
+            #${UI_IDS.modal} .novel-translator-save:hover {
+                background: #278a4c !important;
             }
             #${UI_IDS.modal} .novel-translator-hint {
-                margin: 8px 0 0;
-                color: #777;
+                margin: 7px 0 0;
+                color: #8a8f98;
                 font-size: 12px;
+                line-height: 1.55;
+            }
+
+            /* ===== Toast ===== */
+            #${UI_IDS.toast} {
+                position: fixed;
+                top: 26px;
+                left: 50%;
+                transform: translateX(-50%) translateY(-14px);
+                z-index: 2147483646;
+                max-width: min(560px, calc(100vw - 32px));
+                box-sizing: border-box;
+                padding: 11px 18px;
+                border-radius: 10px;
+                color: #fff;
+                font-size: 14px;
                 line-height: 1.5;
+                box-shadow: 0 8px 26px rgba(0, 0, 0, .24);
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity .25s ease, transform .25s ease;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            }
+            #${UI_IDS.toast}.novel-translator-toast-show {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+            #${UI_IDS.toast}.novel-translator-toast-success {
+                background: #2e9d57;
+            }
+            #${UI_IDS.toast}.novel-translator-toast-error {
+                background: #d9534f;
+            }
+            #${UI_IDS.toast}.novel-translator-toast-info {
+                background: #3c4148;
+            }
+
+            /* ===== 深色模式 ===== */
+            @media (prefers-color-scheme: dark) {
+                #${UI_IDS.root} .nt-bar {
+                    background: rgba(30, 32, 36, .92);
+                    border-color: rgba(255, 255, 255, .1);
+                    box-shadow: 0 6px 22px rgba(0, 0, 0, .55);
+                }
+                #${UI_IDS.root} .nt-btn,
+                #${UI_IDS.root} .nt-icon-btn {
+                    color: #e8e8ea;
+                }
+                #${UI_IDS.root} .nt-btn:hover:not(:disabled),
+                #${UI_IDS.root} .nt-icon-btn:hover:not(:disabled) {
+                    background: rgba(255, 255, 255, .09);
+                }
+                #${UI_IDS.root} #${UI_IDS.settingsButton} {
+                    color: #c6c9cd;
+                }
+                #${UI_IDS.dragHandle} {
+                    color: #6d7075;
+                }
+                .novel-translation {
+                    color: #b4b7bd;
+                    border-left-color: #46b878;
+                }
+                #${UI_IDS.modal} {
+                    background: rgba(0, 0, 0, .62);
+                }
+                #${UI_IDS.modal} .novel-translator-dialog {
+                    background: #222428;
+                    color: #e8e8ea;
+                    box-shadow: 0 12px 40px rgba(0, 0, 0, .6);
+                }
+                #${UI_IDS.modal} .novel-translator-subtitle {
+                    color: #9a9ea5;
+                }
+                #${UI_IDS.modal} input[type="text"],
+                #${UI_IDS.modal} input[type="url"],
+                #${UI_IDS.modal} input[type="password"],
+                #${UI_IDS.modal} select {
+                    background: #191a1d;
+                    border-color: #3d4046;
+                    color: #e8e8ea;
+                }
+                #${UI_IDS.modal} .novel-translator-key-toggle:hover {
+                    background: rgba(255, 255, 255, .08);
+                }
+                #${UI_IDS.modal} .novel-translator-actions button {
+                    background: #2a2c31;
+                    border-color: #3d4046;
+                    color: #e8e8ea;
+                }
+                #${UI_IDS.modal} .novel-translator-actions button:hover {
+                    background: #35383e;
+                }
+                #${UI_IDS.modal} .novel-translator-hint {
+                    color: #8f939a;
+                }
+                #${UI_IDS.toast}.novel-translator-toast-info {
+                    background: #3d434c;
+                }
             }
         `;
         document.head.appendChild(style);
+    }
+
+    // ---------------- 设置面板 ----------------
+
+    function getFocusableElements(container) {
+        return Array.from(container.querySelectorAll(
+            'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+        )).filter((el) => !el.disabled && el.offsetParent !== null);
     }
 
     function createSettingsPanel() {
@@ -585,25 +1222,46 @@
         const modal = document.createElement('div');
         modal.id = UI_IDS.modal;
         modal.hidden = true;
+        const langOptions = Object.entries(LANGUAGE_LABELS)
+            .map(([code, label]) => `<option value="${code}">${label}</option>`)
+            .join('');
         modal.innerHTML = `
             <div class="novel-translator-dialog" role="dialog" aria-modal="true" aria-labelledby="novel-translator-settings-title">
                 <h2 id="novel-translator-settings-title">小说翻译助手设置</h2>
-                <label for="novel-translator-engine">翻译引擎</label>
+                <p class="novel-translator-subtitle" id="novel-translator-settings-subtitle"></p>
+                <label class="novel-translator-label" for="novel-translator-engine">翻译引擎</label>
                 <select id="novel-translator-engine">
-                    <option value="google">Google Translate</option>
-                    <option value="llm">OpenAI 兼容 API</option>
+                    <option value="google">Google 翻译（免费，无需密钥）</option>
+                    <option value="llm">OpenAI 兼容 API（更自然，需密钥）</option>
                 </select>
-                <label for="novel-translator-target-lang">目标语言</label>
-                <input id="novel-translator-target-lang" type="text" autocomplete="off" placeholder="例如 en、ja、ko">
-                <div class="novel-translator-llm-fields">
-                    <label for="novel-translator-api-url">API URL</label>
-                    <input id="novel-translator-api-url" type="url" autocomplete="off">
-                    <label for="novel-translator-api-key">API Key</label>
-                    <input id="novel-translator-api-key" type="password" autocomplete="off">
-                    <label for="novel-translator-model">模型</label>
-                    <input id="novel-translator-model" type="text" autocomplete="off">
-                    <p class="novel-translator-hint">仅选择 OpenAI 兼容 API 时需要填写以上三项。</p>
+                <label class="novel-translator-label" for="novel-translator-target-lang">目标语言</label>
+                <input id="novel-translator-target-lang" type="text" list="novel-translator-lang-list"
+                       autocomplete="off" spellcheck="false" placeholder="选择或输入语言代码，如 en">
+                <datalist id="novel-translator-lang-list">${langOptions}</datalist>
+                <div class="novel-translator-llm-fields" hidden>
+                    <label class="novel-translator-label" for="novel-translator-api-url">API URL</label>
+                    <input id="novel-translator-api-url" type="url" autocomplete="off" spellcheck="false"
+                           placeholder="https://api.openai.com/v1/chat/completions">
+                    <label class="novel-translator-label" for="novel-translator-api-key">API Key</label>
+                    <div class="novel-translator-password-wrap">
+                        <input id="novel-translator-api-key" type="password" autocomplete="off" spellcheck="false">
+                        <button type="button" class="novel-translator-key-toggle"
+                                id="novel-translator-key-toggle" aria-label="显示或隐藏密钥">👁</button>
+                    </div>
+                    <label class="novel-translator-label" for="novel-translator-model">模型</label>
+                    <input id="novel-translator-model" type="text" autocomplete="off" spellcheck="false"
+                           placeholder="gpt-3.5-turbo">
                 </div>
+                <label class="novel-translator-label" for="novel-translator-display-mode">译文显示方式</label>
+                <select id="novel-translator-display-mode">
+                    <option value="inline">逐段对照（译文在每段原文下方）</option>
+                    <option value="translations-only">仅显示译文（隐藏原文）</option>
+                </select>
+                <label class="novel-translator-check" for="novel-translator-auto-next">
+                    <input type="checkbox" id="novel-translator-auto-next">
+                    翻译完成后自动跳转到下一章并继续翻译
+                </label>
+                <p class="novel-translator-hint" id="novel-translator-auto-next-hint"></p>
                 <div class="novel-translator-actions">
                     <button type="button" class="novel-translator-close">关闭</button>
                     <button type="button" class="novel-translator-save">保存</button>
@@ -617,31 +1275,63 @@
         const apiUrl = modal.querySelector('#novel-translator-api-url');
         const apiKey = modal.querySelector('#novel-translator-api-key');
         const model = modal.querySelector('#novel-translator-model');
+        const displayMode = modal.querySelector('#novel-translator-display-mode');
+        const autoNext = modal.querySelector('#novel-translator-auto-next');
+        const autoNextHint = modal.querySelector('#novel-translator-auto-next-hint');
         const llmFields = modal.querySelector('.novel-translator-llm-fields');
+        const keyToggle = modal.querySelector('#novel-translator-key-toggle');
+        const subtitle = modal.querySelector('#novel-translator-settings-subtitle');
 
         engine.value = settings.engine;
         targetLang.value = settings.targetLang;
         apiUrl.value = settings.apiUrl;
         apiKey.value = settings.apiKey;
         model.value = settings.model;
+        displayMode.value = settings.displayMode;
+        autoNext.checked = Boolean(settings.autoNext);
 
         const updateVisibility = () => {
-            llmFields.hidden = engine.value !== 'llm';
+            const isLlm = engine.value === 'llm';
+            llmFields.hidden = !isLlm;
+            subtitle.textContent = `v${SCRIPT_VERSION} · ${isLlm ? 'OpenAI 兼容 API' : 'Google 翻译'}`;
         };
         engine.addEventListener('change', updateVisibility);
+        autoNext.addEventListener('change', () => {
+            const adapter = getMatchedAdapter();
+            if (autoNext.checked && (!adapter || typeof adapter.getNextUrl !== 'function')) {
+                autoNextHint.textContent = '当前站点暂不支持自动翻页，保存后仍会关闭该选项。';
+            }
+        });
+        keyToggle.addEventListener('click', () => {
+            const showing = apiKey.type === 'text';
+            apiKey.type = showing ? 'password' : 'text';
+            keyToggle.textContent = showing ? '👁' : '🙈';
+            keyToggle.setAttribute('aria-label', showing ? '显示密钥' : '隐藏密钥');
+        });
+
         modal.querySelector('.novel-translator-close').addEventListener('click', () => closeSettingsModal(modal));
         modal.querySelector('.novel-translator-save').addEventListener('click', () => {
+            const adapter = getMatchedAdapter();
+            const wantAutoNext = autoNext.checked && adapter && typeof adapter.getNextUrl === 'function';
             const newSettings = {
                 engine: engine.value === 'llm' ? 'llm' : 'google',
                 targetLang: targetLang.value.trim() || DEFAULT_SETTINGS.targetLang,
                 apiUrl: apiUrl.value.trim() || DEFAULT_SETTINGS.apiUrl,
                 apiKey: apiKey.value.trim(),
-                model: model.value.trim() || DEFAULT_SETTINGS.model
+                model: model.value.trim() || DEFAULT_SETTINGS.model,
+                displayMode: displayMode.value === 'translations-only' ? 'translations-only' : 'inline',
+                autoNext: wantAutoNext
             };
+            if (autoNext.checked && !wantAutoNext) {
+                autoNext.checked = false;
+                autoNextHint.textContent = '当前站点不支持自动翻页，已自动关闭该选项。';
+                return;
+            }
             if (saveSettings(newSettings)) {
                 closeSettingsModal(modal);
+                showToast('设置已保存', 'success', 1800);
             } else {
-                window.alert('设置保存失败，请稍后重试。');
+                showToast('设置保存失败，请稍后重试', 'error');
             }
         });
         modal.addEventListener('click', (event) => {
@@ -652,14 +1342,57 @@
         modal.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 closeSettingsModal(modal);
+                return;
+            }
+            if (event.key === 'Tab') {
+                const focusables = getFocusableElements(modal);
+                if (focusables.length === 0) {
+                    event.preventDefault();
+                    return;
+                }
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+                if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
+                }
             }
         });
-        updateVisibility();
+        const loadForm = () => {
+            const current = getSettings();
+            engine.value = current.engine;
+            targetLang.value = current.targetLang;
+            apiUrl.value = current.apiUrl;
+            apiKey.value = current.apiKey;
+            model.value = current.model;
+            displayMode.value = current.displayMode;
+            autoNext.checked = Boolean(current.autoNext);
+            const adapter = getMatchedAdapter();
+            if (!adapter || typeof adapter.getNextUrl !== 'function') {
+                autoNext.disabled = true;
+                autoNextHint.textContent = '当前站点暂不支持自动翻页功能。';
+            } else {
+                autoNext.disabled = false;
+                autoNextHint.textContent = current.autoNext
+                    ? '已开启：翻译完成后将自动跳转下一章并继续翻译。'
+                    : '开启后，翻译完成将自动跳转下一章并继续，直到章节末尾或你关闭此选项。';
+            }
+            updateVisibility();
+        };
+        modal._loadForm = loadForm;
+        loadForm();
         return modal;
     }
 
     function openSettingsModal() {
         const modal = createSettingsPanel();
+        modal._previousFocus = document.activeElement;
+        if (typeof modal._loadForm === 'function') {
+            modal._loadForm();
+        }
         modal.hidden = false;
         const engine = modal.querySelector('#novel-translator-engine');
         engine.focus();
@@ -667,45 +1400,215 @@
 
     function closeSettingsModal(modal) {
         modal.hidden = true;
+        const previous = modal._previousFocus;
+        delete modal._previousFocus;
+        if (previous && typeof previous.focus === 'function' && document.contains(previous)) {
+            try {
+                previous.focus();
+            } catch (error) {
+                // 忽略焦点恢复失败
+            }
+        }
     }
 
-    function createFloatingButton() {
+    // ---------------- 悬浮工具栏（拖拽 / 收起 / 快捷键） ----------------
+
+    function applyUiPosition(root, position) {
+        if (position && typeof position.x === 'number' && typeof position.y === 'number') {
+            root.style.right = 'auto';
+            root.style.bottom = 'auto';
+            root.style.left = `${Math.max(0, Math.min(position.x, window.innerWidth - 60))}px`;
+            root.style.top = `${Math.max(0, Math.min(position.y, window.innerHeight - 60))}px`;
+        }
+    }
+
+    function saveUiPosition(root) {
+        const rect = root.getBoundingClientRect();
+        try {
+            GM_setValue('uiPos', { x: Math.round(rect.left), y: Math.round(rect.top) });
+        } catch (error) {
+            logError('保存按钮位置失败', error);
+        }
+    }
+
+    function setCollapsed(root, collapsed) {
+        root.classList.toggle('nt-collapsed', collapsed);
+        try {
+            GM_setValue('uiCollapsed', collapsed ? 1 : 0);
+        } catch (error) {
+            logError('保存收起状态失败', error);
+        }
+    }
+
+    function createFloatingToolbar() {
         const root = document.createElement('div');
         root.id = UI_IDS.root;
+
+        const bar = document.createElement('div');
+        bar.id = UI_IDS.bar;
+        bar.className = 'nt-bar';
+        bar.setAttribute('role', 'toolbar');
+        bar.setAttribute('aria-label', '小说翻译助手工具栏');
+
+        const dragHandle = document.createElement('button');
+        dragHandle.id = UI_IDS.dragHandle;
+        dragHandle.type = 'button';
+        dragHandle.className = 'nt-icon-btn';
+        dragHandle.textContent = '≡';
+        dragHandle.title = '拖动移动工具栏，双击收起';
+        dragHandle.setAttribute('aria-label', '拖动工具栏，双击收起');
 
         const translateButton = document.createElement('button');
         translateButton.id = UI_IDS.translateButton;
         translateButton.type = 'button';
-        translateButton.textContent = '翻译本章';
-        translateButton.title = '翻译当前章节';
+        translateButton.className = 'nt-btn';
+        translateButton.textContent = DEFAULT_BUTTON_LABEL;
+        translateButton.title = '翻译本章（Alt+T）';
         translateButton.addEventListener('click', () => translateChapter(translateButton));
+
+        const toggleButton = document.createElement('button');
+        toggleButton.id = UI_IDS.toggleButton;
+        toggleButton.type = 'button';
+        toggleButton.className = 'nt-icon-btn';
+        toggleButton.textContent = '👁';
+        toggleButton.title = '暂无译文可切换';
+        toggleButton.disabled = true;
+        toggleButton.addEventListener('click', toggleTranslationVisibility);
 
         const settingsButton = document.createElement('button');
         settingsButton.id = UI_IDS.settingsButton;
         settingsButton.type = 'button';
+        settingsButton.className = 'nt-icon-btn';
         settingsButton.textContent = '⚙';
-        settingsButton.title = '打开翻译设置';
-        settingsButton.setAttribute('aria-label', '打开翻译设置');
+        settingsButton.title = '设置（Alt+S）';
+        settingsButton.setAttribute('aria-label', '打开设置');
         settingsButton.addEventListener('click', openSettingsModal);
 
-        root.append(translateButton, settingsButton);
+        const miniButton = document.createElement('button');
+        miniButton.id = UI_IDS.miniButton;
+        miniButton.type = 'button';
+        miniButton.textContent = '译';
+        miniButton.title = '展开工具栏';
+        miniButton.setAttribute('aria-label', '展开工具栏');
+        miniButton.addEventListener('click', () => setCollapsed(root, false));
+
+        bar.append(dragHandle, translateButton, toggleButton, settingsButton);
+        root.append(bar, miniButton);
+        document.body.appendChild(root);
+
+        // 拖拽
+        let dragState = null;
+        dragHandle.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0 || root.classList.contains('nt-collapsed')) {
+                return;
+            }
+            const rect = root.getBoundingClientRect();
+            dragState = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                baseLeft: rect.left,
+                baseTop: rect.top
+            };
+            root.style.right = 'auto';
+            root.style.bottom = 'auto';
+            try {
+                dragHandle.setPointerCapture(event.pointerId);
+            } catch (error) {
+                // 指针捕获失败时退回普通监听
+            }
+        });
+        dragHandle.addEventListener('pointermove', (event) => {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
+                return;
+            }
+            const left = dragState.baseLeft + (event.clientX - dragState.startX);
+            const top = dragState.baseTop + (event.clientY - dragState.startY);
+            root.style.left = `${Math.max(0, Math.min(left, window.innerWidth - 60))}px`;
+            root.style.top = `${Math.max(0, Math.min(top, window.innerHeight - 60))}px`;
+            root.style.right = 'auto';
+            root.style.bottom = 'auto';
+        });
+        const endDrag = (event) => {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
+                return;
+            }
+            saveUiPosition(root);
+            dragState = null;
+        };
+        dragHandle.addEventListener('pointerup', endDrag);
+        dragHandle.addEventListener('pointercancel', endDrag);
+
+        // 双击收起
+        dragHandle.addEventListener('dblclick', (event) => {
+            event.preventDefault();
+            setCollapsed(root, !root.classList.contains('nt-collapsed'));
+        });
+
+        // 恢复持久化状态
+        let uiPosition = null;
+        try {
+            uiPosition = GM_getValue('uiPos', null);
+        } catch (error) {
+            logError('读取按钮位置失败', error);
+        }
+        applyUiPosition(root, uiPosition);
+        let collapsed = false;
+        try {
+            collapsed = GM_getValue('uiCollapsed', 0) === 1;
+        } catch (error) {
+            logError('读取收起状态失败', error);
+        }
+        if (collapsed) {
+            setCollapsed(root, true);
+        }
         return root;
     }
+
+    function registerKeyboardShortcuts() {
+        document.addEventListener('keydown', (event) => {
+            if (!event.altKey || event.ctrlKey || event.metaKey || event.repeat) {
+                return;
+            }
+            const key = event.key.toLowerCase();
+            const button = document.getElementById(UI_IDS.translateButton);
+            if (key === 't' && button) {
+                event.preventDefault();
+                translateChapter(button);
+            } else if (key === 'h') {
+                const anyTranslation = document.querySelectorAll('.novel-translation, .novel-translation-block').length > 0;
+                if (anyTranslation) {
+                    event.preventDefault();
+                    toggleTranslationVisibility();
+                }
+            } else if (key === 's') {
+                event.preventDefault();
+                openSettingsModal();
+            }
+        });
+    }
+
+    // ---------------- 初始化 ----------------
 
     function injectUI() {
         if (document.getElementById(UI_IDS.root)) {
             return;
         }
         injectStyles();
-        document.body.appendChild(createFloatingButton());
+        const root = createFloatingToolbar();
         createSettingsPanel();
+        registerKeyboardShortcuts();
+        root.dataset.tlVisible = '1';
     }
 
     function init() {
-        if (!getMatchedAdapter()) {
+        const adapter = getMatchedAdapter();
+        if (!adapter) {
+            clearStaleAutoTarget();
             return;
         }
         injectUI();
+        handleAutoContinue();
     }
 
     if (document.readyState === 'loading') {
