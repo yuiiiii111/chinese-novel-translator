@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         小说翻译助手
-// @name:en      Novel Translator
+// @name:en      Chinese Novel Translator
 // @namespace    https://github.com/yuiiiii111/Git
-// @version      0.2.0
-// @description  在起点中文网、晋江文学城、番茄小说等章节页一键翻译正文，支持 Google 翻译与 OpenAI 兼容 API，自动缓存译文，可逐段对照或仅看译文。
-// @description:en Translate Chinese novel chapters on Qidian, Jinjiang and Fanqie. Google Translate & OpenAI-compatible APIs, per-chapter cache, side-by-side or translations-only view.
+// @version      0.2.1
+// @description  为了非母语为中文的英语用户，针对中文小说网站做的插件：在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言，支持 Google 翻译与 OpenAI 兼容 API。
+// @description:en A userscript for English speakers who are not native Chinese readers: one-click translation of chapter text on Chinese novel sites (Qidian, Jinjiang, Fanqie), powered by Google Translate and OpenAI-compatible APIs.
 // @author       yuiiiii111
 // @homepageURL  https://github.com/yuiiiii111/Git
 // @supportURL   https://github.com/yuiiiii111/Git/issues
@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.2.0';
+    const SCRIPT_VERSION = '0.2.1';
 
     const DEFAULT_SETTINGS = {
         engine: 'google',
