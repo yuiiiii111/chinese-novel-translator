@@ -2,7 +2,7 @@
 // @name         小说翻译助手
 // @name:en      Chinese Novel Translator
 // @namespace    https://github.com/yuiiiii111/Git
-// @version      0.2.1
+// @version      0.2.2
 // @description  为了非母语为中文的英语用户，针对中文小说网站做的插件：在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言，支持 Google 翻译与 OpenAI 兼容 API。
 // @description:en A userscript for English speakers who are not native Chinese readers: one-click translation of chapter text on Chinese novel sites (Qidian, Jinjiang, Fanqie), powered by Google Translate and OpenAI-compatible APIs.
 // @author       yuiiiii111
@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.2.1';
+    const SCRIPT_VERSION = '0.2.2';
 
     const DEFAULT_SETTINGS = {
         engine: 'google',
@@ -136,6 +136,7 @@
     };
 
     let session = null;
+    let autoNextTimer = null;
 
     // ---------------- 基础工具 ----------------
 
@@ -420,13 +421,19 @@
         };
     }
 
-    function getCacheKey() {
-        return `cache_${window.location.pathname}`;
+    function getCacheKey(settings, chapterUrl = window.location.href) {
+        const url = new URL(chapterUrl);
+        const engine = settings.engine === 'llm' ? 'llm' : 'google';
+        return `cache_v2_${JSON.stringify([
+            url.origin, url.pathname, url.search, settings.targetLang, engine,
+            engine === 'llm' ? settings.apiUrl : '',
+            engine === 'llm' ? settings.model : ''
+        ])}`;
     }
 
-    function readCache(sourceTexts, settings) {
+    function readCache(sourceTexts, settings, cacheKey = getCacheKey(settings)) {
         try {
-            const storedCache = GM_getValue(getCacheKey(), null);
+            const storedCache = GM_getValue(cacheKey, null);
             const cache = typeof storedCache === 'string'
                 ? JSON.parse(storedCache)
                 : storedCache;
@@ -452,9 +459,9 @@
         }
     }
 
-    function writeCache(sourceTexts, translations, settings) {
+    function writeCache(sourceTexts, translations, settings, cacheKey = getCacheKey(settings)) {
         try {
-            GM_setValue(getCacheKey(), JSON.stringify({
+            GM_setValue(cacheKey, JSON.stringify({
                 targetLang: settings.targetLang,
                 sourceTexts,
                 translations,
@@ -468,6 +475,8 @@
     // ---------------- 译文渲染 ----------------
 
     function clearTranslation() {
+        window.clearTimeout(autoNextTimer);
+        autoNextTimer = null;
         document.querySelectorAll('.novel-translation, .novel-translation-block').forEach((node) => node.remove());
         document.querySelectorAll('.nt-hidden-source').forEach((node) => node.classList.remove('nt-hidden-source'));
         session = null;
@@ -550,7 +559,9 @@
     }
 
     async function retrySegment(sessionData, index, node) {
-        if (!sessionData || !node || node.dataset.retrying === '1') {
+        if (!sessionData || session !== sessionData || !node || !node.isConnected
+            || node.dataset.retrying === '1' || !node.classList.contains('novel-translation-failed')
+            || window.location.href !== sessionData.chapterUrl) {
             return;
         }
         const source = sessionData.sourceTexts[index];
@@ -562,10 +573,14 @@
         node.textContent = '⟳ 重试中…';
         try {
             const translation = await translateText(source, sessionData.settings.targetLang, sessionData.settings);
+            if (session !== sessionData || !node.isConnected || window.location.href !== sessionData.chapterUrl) {
+                return;
+            }
             if (typeof translation === 'string' && translation) {
                 node.textContent = translation;
+                node.removeAttribute('title');
                 sessionData.translations[index] = translation;
-                writeCache(sessionData.sourceTexts, sessionData.translations, sessionData.settings);
+                writeCache(sessionData.sourceTexts, sessionData.translations, sessionData.settings, sessionData.cacheKey);
                 showToast('该段已重新翻译', 'success', 2000);
             } else {
                 node.textContent = '翻译失败，点击此处重试';
@@ -610,6 +625,12 @@
         nodes.forEach((node) => {
             node.style.display = visible ? '' : 'none';
         });
+        if (session && session.settings.displayMode === 'translations-only') {
+            const sources = session.segments.map((segment) => segment.element).filter(Boolean);
+            (sources.length ? sources : [session.container]).forEach((node) => {
+                node.classList.toggle('nt-hidden-source', visible);
+            });
+        }
         toggleButton.textContent = visible ? '🙈' : '👁';
         toggleButton.title = visible ? '隐藏译文（Alt+H）' : '显示译文（Alt+H）';
         toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
@@ -648,6 +669,8 @@
         setButtonState(button, '⏳ 准备中…', true);
 
         const settings = getSettings();
+        const chapterUrl = window.location.href;
+        const cacheKey = getCacheKey(settings, chapterUrl);
         if (settings.engine === 'llm' && !settings.apiKey) {
             setButtonState(button, DEFAULT_BUTTON_LABEL, false);
             showToast('请先在设置中填写 API Key', 'error');
@@ -665,8 +688,8 @@
 
             const sourceTexts = segments.map((segment) => segment.text);
             const total = sourceTexts.length;
-            let translations = readCache(sourceTexts, settings);
-            let usedCache = Boolean(translations);
+            let translations = readCache(sourceTexts, settings, cacheKey);
+            const usedCache = Boolean(translations);
 
             if (!translations) {
                 setButtonState(button, `⏳ 翻译中 (0/${total})`, true);
@@ -684,12 +707,19 @@
                     showToast('翻译失败，请检查设置或网络', 'error');
                     return;
                 }
-                if (translations.every((translation) => typeof translation === 'string' && translation)) {
-                    writeCache(sourceTexts, translations, settings);
-                }
             }
 
+            if (window.location.href !== chapterUrl || !container.isConnected) {
+                setButtonState(button, DEFAULT_BUTTON_LABEL, false);
+                showToast('章节已变化，请重新翻译当前章节', 'info');
+                return;
+            }
+            if (!usedCache && translations.every((translation) => typeof translation === 'string' && translation)) {
+                writeCache(sourceTexts, translations, settings, cacheKey);
+            }
             session = {
+                chapterUrl,
+                cacheKey,
                 container,
                 segments,
                 sourceTexts,
@@ -717,7 +747,9 @@
                 showToast(`翻译完成：${total} 段，用时 ${elapsed} 秒`, 'success', 2600);
             }
 
-            scheduleAutoNext(adapter, settings);
+            if (failedCount === 0) {
+                scheduleAutoNext(adapter, settings);
+            }
         } catch (error) {
             logError('翻译章节失败', error);
             setButtonState(button, '翻译失败，重试', false);
@@ -729,6 +761,8 @@
     // ---------------- 自动翻译下一章（可选，默认关闭） ----------------
 
     function scheduleAutoNext(adapter, settings) {
+        window.clearTimeout(autoNextTimer);
+        autoNextTimer = null;
         if (!settings.autoNext || !adapter || typeof adapter.getNextUrl !== 'function') {
             return;
         }
@@ -743,7 +777,13 @@
             return;
         }
         showToast('即将自动跳转到下一章并继续翻译…', 'info', 1600);
-        window.setTimeout(() => {
+        const scheduledSession = session;
+        const chapterUrl = window.location.href;
+        autoNextTimer = window.setTimeout(() => {
+            autoNextTimer = null;
+            if (session !== scheduledSession || window.location.href !== chapterUrl) {
+                return;
+            }
             // 跳转前复查：用户可能在这 2 秒内关闭了自动翻译
             let latestSettings;
             try {
