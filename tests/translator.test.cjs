@@ -6,6 +6,16 @@ const vm = require('node:vm');
 
 const source = readFileSync(path.join(__dirname, '../novel-translator.user.js'), 'utf8');
 
+function memoryResponse(translation) {
+    return {
+        status: 200,
+        responseText: JSON.stringify({
+            responseStatus: 200,
+            responseData: { translatedText: translation }
+        })
+    };
+}
+
 function element(failed = false) {
     const classes = new Set(failed ? ['novel-translation-failed'] : []);
     return {
@@ -32,7 +42,7 @@ function harness() {
     const requests = [];
     let nextTimer = 0;
     const context = vm.createContext({
-        URL, URLSearchParams, console,
+        URL, URLSearchParams, TextEncoder, console,
         GM_getValue: (key, fallback) => storage.has(key) ? storage.get(key) : fallback,
         GM_setValue: (key, value) => storage.set(key, value),
         GM_log() {},
@@ -57,7 +67,7 @@ function harness() {
     vm.runInContext(source.replace(/\}\)\(\);\s*$/, `
         globalThis.api = { DEFAULT_SETTINGS, getCacheKey, readCache, writeCache,
             retrySegment, applyTranslationVisibility, clearTranslation, scheduleAutoNext,
-            translateChapter,
+            translateChapter, decodeFanqieText, splitByUtf8Bytes, decodeTranslationEntities,
             setSession(value) { session = value; },
             setAdapter(value) { adapters.unshift(value); }
         };
@@ -73,6 +83,34 @@ function harness() {
     api.setSession(session);
     return { api, settings, session, context, storage, timers, root, nodes, requests };
 }
+
+test('Fanqie private-use characters decode before translation', () => {
+    const { api } = harness();
+    const paragraph = element();
+    paragraph.parentElement = {
+        nodeType: 1,
+        className: 'muye-reader-box font-DNMrHsV173Pd4pgy',
+        parentElement: null
+    };
+    assert.equal(
+        api.decodeFanqieText('番茄读朋：', paragraph),
+        '番茄小说的读者朋友们：'
+    );
+    assert.equal(api.decodeFanqieText('普通中文无需解码', paragraph), '普通中文无需解码');
+});
+
+test('free translation chunks stay within the MyMemory byte limit', () => {
+    const { api } = harness();
+    const sourceText = '这是一段用于测试长文本拆分的中文小说内容。'.repeat(50);
+    const chunks = Array.from(api.splitByUtf8Bytes(sourceText, 450));
+    assert.equal(chunks.join(''), sourceText);
+    assert.ok(chunks.length > 1);
+    chunks.forEach((chunk) => assert.ok(new TextEncoder().encode(chunk).length <= 450));
+    assert.equal(
+        api.decodeTranslationEntities('&quot;Hi&#39;s&#x20;&amp;&lt;&gt;'),
+        '"Hi\'s &<>'
+    );
+});
 
 test('cache separates chapter query, host, language, engine, model and endpoint', () => {
     const { api, settings, context } = harness();
@@ -141,7 +179,7 @@ test('successful retry updates cache and cannot submit again on click', async ()
     const pending = api.retrySegment(session, 0, node);
     await api.retrySegment(session, 0, node);
     assert.equal(requests.length, 1);
-    requests[0].onload({ status: 200, responseText: JSON.stringify([[['Translated']]]) });
+    requests[0].onload(memoryResponse('Translated'));
     await pending;
     assert.equal(node.textContent, 'Translated');
     assert.equal(node.classList.contains('novel-translation-failed'), false);
@@ -158,7 +196,7 @@ for (const staleReason of ['session', 'navigation', 'detached']) {
         if (staleReason === 'session') api.setSession(null);
         if (staleReason === 'navigation') context.window.location.href += '?other=1';
         if (staleReason === 'detached') node.isConnected = false;
-        requests[0].onload({ status: 200, responseText: JSON.stringify([[['Late result']]]) });
+        requests[0].onload(memoryResponse('Late result'));
         await pending;
         assert.equal(session.translations[0], null);
         assert.equal(storage.size, 0);
@@ -197,7 +235,7 @@ test('a complete chapter uses its cache on the next translation', async () => {
     const button = element();
     const pending = api.translateChapter(button);
     await new Promise(setImmediate);
-    requests[0].onload({ status: 200, responseText: JSON.stringify([[['Chapter translation']]]) });
+    requests[0].onload(memoryResponse('Chapter translation'));
     await pending;
     assert.equal(api.readCache(session.sourceTexts, settings)[0], 'Chapter translation');
     await api.translateChapter(button);
@@ -216,7 +254,7 @@ test('chapter navigation during a request discards the result', async () => {
     const pending = api.translateChapter(button);
     await new Promise(setImmediate);
     context.window.location.href = 'https://www.qidian.com/chapter/1/3/';
-    requests[0].onload({ status: 200, responseText: JSON.stringify([[['Stale chapter']]]) });
+    requests[0].onload(memoryResponse('Stale chapter'));
     await pending;
     assert.equal(storage.size, 0);
     assert.equal(button.disabled, false);
@@ -225,6 +263,8 @@ test('chapter navigation during a request discards the result', async () => {
 test('a partly failed chapter pauses automatic navigation', async () => {
     const { api, session, requests, context, storage, settings, timers } = harness();
     settings.autoNext = true;
+    settings.engine = 'llm';
+    settings.apiKey = 'test-key';
     storage.set('settings', settings);
     session.segments.push({ element: element(), text: '失败段落' });
     let nextUrlLookups = 0;
@@ -237,7 +277,10 @@ test('a partly failed chapter pauses automatic navigation', async () => {
     const button = element();
     const pending = api.translateChapter(button);
     await new Promise(setImmediate);
-    requests[0].onload({ status: 200, responseText: JSON.stringify([[['Good paragraph']]]) });
+    requests[0].onload({
+        status: 200,
+        responseText: JSON.stringify({ choices: [{ message: { content: 'Good paragraph' } }] })
+    });
     requests[1].onerror({ status: 503 });
     await new Promise(setImmediate);
     // Release the automatic retry delay without waiting a second in the test.

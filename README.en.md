@@ -8,14 +8,15 @@
 >
 > One click translates chapter text on Chinese web-novel sites (Qidian, Jinjiang, Fanqie and more) into a language you know (English, Japanese, Korean…), displayed right below the original text for side-by-side reading.
 
-A Tampermonkey userscript that reads chapter content through per-site adapters and translates it with the unofficial Google Translate endpoint or any OpenAI-compatible LLM API. Translations are cached by site, chapter path and query parameters, target language, and engine configuration in Tampermonkey storage, so translating the same chapter again can reuse its cache.
+A Tampermonkey userscript that reads chapter content through per-site adapters and translates it with free translation services or any OpenAI-compatible LLM API. Translations are cached by site, chapter path and query parameters, target language, and engine configuration in Tampermonkey storage, so translating the same chapter again can reuse its cache.
 
 Pure front-end userscript — no build tools, backend services, or extra dependencies required.
 
 ## Features
 
 - Supports Qidian (起点中文网), Jinjiang Literature City (晋江文学城), and Fanqie Novel (番茄小说).
-- Two translation engines: Google Translate and OpenAI-compatible APIs.
+- Two translation engines: free translation and OpenAI-compatible APIs.
+- Recognizes current Qidian, Jinjiang, and Fanqie layouts and decodes Fanqie's obfuscated font text before translation.
 - Batches 5 paragraphs concurrently with a live progress indicator (e.g. "Translating 12/45"); 10 s request timeout.
 - Automatic one-time retry on failure; paragraphs that still fail turn into red clickable nodes — click one to retry that single paragraph.
 - Cache separated by site, chapter parameters, target language, engine, and LLM endpoint/model; a successful segment retry updates it automatically.
@@ -43,9 +44,9 @@ If the browser or Tampermonkey asks for cross-origin permission, allow the scrip
 
 | Site | URL pattern | Content selector | Handling |
 | --- | --- | --- | --- |
-| Qidian (起点中文网) | `*.qidian.com` chapter pages | `p` inside `.read-content` | Per-paragraph (auto-next supported) |
-| Jinjiang (晋江文学城) | `*.jjwxc.net` | `.noveltext` | Split by line breaks |
-| Fanqie (番茄小说) | `*.fanqienovel.com` | `p` inside `.page-content` | Per-paragraph |
+| Qidian (起点中文网) | `www.qidian.com/chapter/*`, `read.qidian.com/chapter/*` | `.chapter-wrapper main.content`, with legacy fallbacks | Per-paragraph (auto-next supported) |
+| Jinjiang (晋江文学城) | `www.jjwxc.net`, `m.jjwxc.net` | `#paragraph_comment_content` or mobile body | Paragraphs or line breaks |
+| Fanqie (番茄小说) | `fanqienovel.com/reader/*` | `.muye-reader-content`, with legacy fallback | Decode font obfuscation, then translate paragraphs |
 
 Site markup may change over time. If the button does not appear, the page usually no longer matches the adapter URL or content selector.
 
@@ -64,13 +65,13 @@ Shortcuts: `Alt+T` translate, `Alt+H` show/hide translations, `Alt+S` settings.
 
 Open the settings panel with the gear button (or `Alt+S`).
 
-### Google Translate
+### Free Translation
 
-- Engine: `Google 翻译（免费，无需密钥）` (free, no key required)
+- Engine: `免费翻译（MyMemory，Google 备用）` (free, no key required)
 - Target language: pick from the suggestion list or type a language code, e.g. `en` (English), `ja` (Japanese), `ko` (Korean), `de` (German).
 - No API URL, key, or model needed.
 
-The script uses the unofficial endpoint `translate.googleapis.com/translate_a/single`. It may be affected by service policy, rate limits, or regional network conditions.
+The script uses MyMemory first and falls back to Google Translate when needed. Long paragraphs are split by UTF-8 byte length before sending. Availability can still be affected by rate limits or regional network conditions.
 
 ### OpenAI-Compatible API
 
@@ -98,9 +99,9 @@ The prompt sent is:
 
 When enabled, the script jumps to the next chapter only after every paragraph translates successfully, and continues until the last chapter or until you turn the option off. Failed paragraphs pause navigation so you can retry them. After fixing them, click **Translate chapter** again to resume auto-next. Starting another translation cancels the previous pending jump. Currently supported on Qidian chapter pages only; the checkbox is greyed out on Fanqie and Jinjiang pages.
 
-### Upgrading from 0.2.1
+### Upgrading from 0.2.2
 
-Replace the script in Tampermonkey, save, and refresh the chapter page. Existing settings are preserved. Version 0.2.2 uses new cache keys and ignores old caches, so the first translation will request the service again.
+Replace the script in Tampermonkey, save, and refresh the chapter page. Existing settings are preserved, and the previous Google free-engine setting is migrated automatically.
 
 ## Usage Flow
 
@@ -159,7 +160,7 @@ Before submitting, please verify at least:
 - The content selector reads only the novel body.
 - Empty paragraphs, ads, and navigation content are not translated.
 - Repeated clicks on the translate button do not duplicate translations.
-- Both the Google Translate and OpenAI-compatible engines work.
+- Both the free translation and OpenAI-compatible engines work.
 
 ## MIT License
 

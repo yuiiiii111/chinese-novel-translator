@@ -2,9 +2,9 @@
 // @name         小说翻译助手
 // @name:en      Chinese Novel Translator
 // @namespace    https://github.com/yuiiiii111/Git
-// @version      0.2.2
-// @description  为了非母语为中文的英语用户，针对中文小说网站做的插件：在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言，支持 Google 翻译与 OpenAI 兼容 API。
-// @description:en A userscript for English speakers who are not native Chinese readers: one-click translation of chapter text on Chinese novel sites (Qidian, Jinjiang, Fanqie), powered by Google Translate and OpenAI-compatible APIs.
+// @version      0.2.3
+// @description  为了非母语为中文的英语用户，针对中文小说网站做的插件：在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言，支持免费翻译服务与 OpenAI 兼容 API。
+// @description:en A userscript for English speakers who are not native Chinese readers: one-click translation of chapter text on Chinese novel sites (Qidian, Jinjiang, Fanqie), powered by free translation services and OpenAI-compatible APIs.
 // @author       yuiiiii111
 // @homepageURL  https://github.com/yuiiiii111/Git
 // @supportURL   https://github.com/yuiiiii111/Git/issues
@@ -17,6 +17,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_log
 // @connect      translate.googleapis.com
+// @connect      api.mymemory.translated.net
 // @connect      api.openai.com
 // @connect      *
 // @run-at       document-end
@@ -25,10 +26,10 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.2.2';
+    const SCRIPT_VERSION = '0.2.3';
 
     const DEFAULT_SETTINGS = {
-        engine: 'google',
+        engine: 'free',
         targetLang: 'en',
         apiUrl: 'https://api.openai.com/v1/chat/completions',
         apiKey: '',
@@ -49,10 +50,54 @@
         toast: 'novel-translator-toast'
     };
 
+    // 番茄正文使用自定义字体把常用字符映射到私用区。
+    // 字体表来源：https://github.com/404-novel-project/fanqie_font_tables
+    // 解码实现参考 MIT 许可脚本：https://greasyfork.org/scripts/587834
+    const FANQIE_CODE_START = 58344;
+    const FANQIE_CODE_END = 58715;
+    const FANQIE_TABLES = {
+        DNMrHsV173Pd4pgy: 'D在主特家军然表场4要只v和?6别还g现儿岁??此象月3出战工相'
+            + 'o男直失世F都平文什VO将真T那当?会立些u是十张学气大爱两命全'
+            + '后东性通被1它乐接而感车山公了常以何可话先pi叫轻M士w着变尔快'
+            + 'l个说少色里安花远7难师放t报认面道S?克地度I好机U民写把万同'
+            + '水新没书电吃像斯5为y白几日教看但第加候作上拉住有法r事应位利你'
+            + '声身国问马女他Y比父xAHNsX边美对所金活回意到z从j知又内因'
+            + '点Q三定8Rb正或夫向德听更?得告并本q过记L让打f人就者去原满'
+            + '体做经K走如孩cG给使物?最笑部?员等受k行一条果动光门头见往自'
+            + '解成处天能于名其发总母的死手入路进心来h时力多开已许d至由很界n'
+            + '小与Z想代么分生口再妈望次西风种带J?实情才这?E我神格长觉间年'
+            + '眼无不亲关结0友信下却重己老2音字m呢明之前高PB目太e9起稜她'
+            + '也W用方子英每理便四数期中C外样a海们任',
+        fKts9tCXDjS49UhH: '体y十现快使话却月物水的放知爱方?表风理O老也p常克平几最主她s'
+            + '将法情o光a我呢J员太每望受教w利军已U人如变得要少斯门电m男没'
+            + 'AK国时中走么何口小向问轻Td神下间车fG度D又大面远就写j给通'
+            + '起实E?它去S到道数吃们加P是无把事西多界?发新外活解孩只作前Y'
+            + '尔经?u心告父等Q民全这9果安?i母8r说任先和地C张战场g像c'
+            + 'q你使?样总目x性处音头?应乐关能花I当名手4重字声力友然生代内'
+            + '里本回真入师象?0点R亲V种动英命ZhX做特边高有B为期自年马认'
+            + '出接至H正方感所明者棱F住学还分意更其n但比觉以由死家让失士L2'
+            + 'I金叫身报听W再原山海白很见5直位第工个开岁好用都于可同3次四?'
+            + '日信与女笑满并部什不从或机此?了记三e些bN夫会才几眼两美被一公'
+            + '来立z长对己看k许因相色后往打结格过世气7子条在书之定v拉成进带'
+            + '着东上想天他妈1文而路那别德6Mt行候难',
+        _search: '?s?作口在他能并B士4U克才正们字声高全尔活者动其主报多望放h'
+            + 'w次年?中3特于十入要男同G面分方K什再教本己结1等世N?说gu'
+            + '期Z外美M行给9文将两许张友0英应向像此白安少何打气常定间花见孩'
+            + '它直风数使道第水已女山解dP的通关性叫几L妈问回神来S?四里前国'
+            + '些OvIA心平自无车光代是好却c得种就意先立z子过Yj表?么所接'
+            + '了名金受J满眼没部那m每车度可R斯经现门明V如走命y6E战很上f'
+            + '月西7长夫想话变海机x到W一成生信笑但父开内东马日小而后带以三几'
+            + '为认X死员目位之学远入音呢我q乐象重对个被别F也书棱D写还因家发'
+            + '时i或住德当oI比觉然吃去公a老亲情体太b方C电理?失力更拉物着'
+            + '原她工实色感记看出相路大你候2和?与p样新只便最不进Tr做格母总'
+            + '爱身师轻知往加从?天eH?听场由快边让把任8条头事至起点真手这难'
+            + '都界用法n处下文Q告地5kt岁有会果利民'
+    };
+
     const adapters = [
         {
             name: '起点中文网',
-            match: /www\.qidian\.com\/chapter\//i,
+            match: /(?:www|read)\.qidian\.com\/chapter\//i,
             getContent() {
                 const container = this.getContainer();
                 if (!container) {
@@ -66,25 +111,56 @@
                     .filter((item) => item.text);
             },
             getContainer() {
-                return document.querySelector('.read-content');
+                return document.querySelector(
+                    '.chapter-wrapper .print main.content, '
+                    + '.chapter-wrapper main.content, main.content, '
+                    + '.read-content, .main-text-wrap, .chapter-content'
+                );
             },
             getNextUrl() {
-                const next = document.querySelector('a#j_chapterNext, a.j_chapterNext, a[href*="/chapter/"].next');
-                return next && next.href ? next.href : null;
+                const navigationLinks = Array.from(
+                    document.querySelectorAll('.nav-btn-group a[href]')
+                );
+                const next = navigationLinks.find((link) => /下一章/.test(cleanText(link.textContent)))
+                    || navigationLinks[navigationLinks.length - 1]
+                    || document.querySelector('a#j_chapterNext, a.j_chapterNext, a.next[href]');
+                if (!next || !next.href) {
+                    return null;
+                }
+                try {
+                    const url = new URL(next.href, window.location.href);
+                    return /(?:^|\.)qidian\.com$/i.test(url.hostname)
+                        && /\/chapter\/[^/]+\/[^/]+\/?$/i.test(url.pathname)
+                        ? url.href
+                        : null;
+                } catch (error) {
+                    return null;
+                }
             }
         },
         {
             name: '晋江文学城',
-            match: /www\.jjwxc\.net/i,
+            match: /(?:www|m)\.jjwxc\.net/i,
             getContent() {
                 const container = this.getContainer();
                 if (!container) {
                     return [];
                 }
 
+                const paragraphNodes = Array.from(
+                    container.querySelectorAll('.onebook_paragraph_comment_text')
+                );
+                if (paragraphNodes.length > 0) {
+                    return paragraphNodes
+                        .map((element) => ({ element, text: cleanText(element.textContent) }))
+                        .filter((item) => item.text);
+                }
+
                 const copy = container.cloneNode(true);
-                copy.querySelectorAll('.novel-translation').forEach((node) => node.remove());
-                const content = copy.innerText || copy.textContent;
+                copy.querySelectorAll('.novel-translation, .novel-translation-block')
+                    .forEach((node) => node.remove());
+                copy.querySelectorAll('br').forEach((node) => node.replaceWith('\n'));
+                const content = copy.textContent || '';
                 return content
                     .split(/\r?\n+/)
                     .map((text) => cleanText(text))
@@ -92,13 +168,15 @@
                     .map((text) => ({ element: null, text }));
             },
             getContainer() {
-                return document.querySelector('.noveltext');
+                return document.querySelector(
+                    '#paragraph_comment_content, ul.content_ul > li, .noveltext'
+                );
             },
             getNextUrl: null
         },
         {
             name: '番茄小说',
-            match: /fanqienovel\.com/i,
+            match: /fanqienovel\.com\/reader\//i,
             getContent() {
                 const container = this.getContainer();
                 if (!container) {
@@ -107,12 +185,12 @@
                 return Array.from(container.querySelectorAll('p'))
                     .map((element) => ({
                         element,
-                        text: cleanText(element.textContent)
+                        text: cleanText(decodeFanqieText(element.textContent, element))
                     }))
                     .filter((item) => item.text);
             },
             getContainer() {
-                return document.querySelector('.page-content');
+                return document.querySelector('.muye-reader-content, .page-content');
             },
             getNextUrl: null
         }
@@ -147,6 +225,77 @@
             .trim();
     }
 
+    function countFanqiePrivateCharacters(text) {
+        return Array.from(String(text || '')).filter((character) => {
+            const code = character.codePointAt(0);
+            return code >= FANQIE_CODE_START && code <= FANQIE_CODE_END;
+        }).length;
+    }
+
+    function findFanqieFontId(element) {
+        let current = element;
+        while (current && current.nodeType === 1) {
+            const className = typeof current.className === 'string' ? current.className : '';
+            const matchedId = Object.keys(FANQIE_TABLES)
+                .find((fontId) => className.split(/\s+/).includes(`font-${fontId}`));
+            if (matchedId) {
+                return matchedId;
+            }
+            current = current.parentElement;
+        }
+
+        try {
+            const family = element && typeof window.getComputedStyle === 'function'
+                ? window.getComputedStyle(element).fontFamily
+                : '';
+            return Object.keys(FANQIE_TABLES).find((fontId) => family.includes(fontId)) || null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function decodeFanqieWithTable(text, fontId) {
+        const table = Array.from(FANQIE_TABLES[fontId] || '');
+        if (table.length !== FANQIE_CODE_END - FANQIE_CODE_START + 1) {
+            return null;
+        }
+        return Array.from(text).map((character) => {
+            const code = character.codePointAt(0);
+            if (code < FANQIE_CODE_START || code > FANQIE_CODE_END) {
+                return character;
+            }
+            const decoded = table[code - FANQIE_CODE_START];
+            return decoded && decoded !== '?' ? decoded : character;
+        }).join('');
+    }
+
+    function decodeFanqieText(value, element) {
+        const text = String(value || '');
+        const privateCount = countFanqiePrivateCharacters(text);
+        if (privateCount === 0) {
+            return text;
+        }
+
+        const detectedId = findFanqieFontId(element);
+        const candidateIds = detectedId
+            ? [detectedId]
+            : Object.keys(FANQIE_TABLES);
+        let best = text;
+        let bestPrivateCount = privateCount;
+        candidateIds.forEach((fontId) => {
+            const decoded = decodeFanqieWithTable(text, fontId);
+            if (decoded === null) {
+                return;
+            }
+            const remaining = countFanqiePrivateCharacters(decoded);
+            if (remaining < bestPrivateCount) {
+                best = decoded;
+                bestPrivateCount = remaining;
+            }
+        });
+        return best;
+    }
+
     function delay(milliseconds) {
         return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
     }
@@ -165,6 +314,8 @@
         try {
             const stored = GM_getValue('settings', {});
             const settings = Object.assign({}, DEFAULT_SETTINGS, stored || {});
+            // 0.2.2 及更早版本只有 google/llm；旧的免费引擎设置自动迁移。
+            settings.engine = settings.engine === 'llm' ? 'llm' : 'free';
             settings.targetLang = String(settings.targetLang || '').trim() || DEFAULT_SETTINGS.targetLang;
             settings.apiUrl = String(settings.apiUrl || '').trim() || DEFAULT_SETTINGS.apiUrl;
             settings.model = String(settings.model || '').trim() || DEFAULT_SETTINGS.model;
@@ -181,6 +332,7 @@
     function saveSettings(settings) {
         try {
             const mergedSettings = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+            mergedSettings.engine = mergedSettings.engine === 'llm' ? 'llm' : 'free';
             mergedSettings.targetLang = String(mergedSettings.targetLang || '').trim() || DEFAULT_SETTINGS.targetLang;
             mergedSettings.apiUrl = String(mergedSettings.apiUrl || '').trim() || DEFAULT_SETTINGS.apiUrl;
             mergedSettings.model = String(mergedSettings.model || '').trim() || DEFAULT_SETTINGS.model;
@@ -265,6 +417,76 @@
         return response && response.status ? response.status : '未知错误';
     }
 
+    function splitByUtf8Bytes(text, maxBytes) {
+        const encoder = new TextEncoder();
+        const chunks = [];
+        let current = '';
+        Array.from(text).forEach((character) => {
+            const candidate = current + character;
+            if (current && encoder.encode(candidate).length > maxBytes) {
+                chunks.push(current);
+                current = character;
+            } else {
+                current = candidate;
+            }
+            if (encoder.encode(current).length >= 300 && /[。！？!?；;]$/.test(current)) {
+                chunks.push(current);
+                current = '';
+            }
+        });
+        if (current) {
+            chunks.push(current);
+        }
+        return chunks;
+    }
+
+    function decodeTranslationEntities(value) {
+        return String(value || '')
+            .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+            .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(parseInt(code, 10)))
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;|&apos;/g, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&');
+    }
+
+    async function myMemoryTranslate(text, targetLang) {
+        try {
+            const translatedChunks = [];
+            const chunks = splitByUtf8Bytes(text, 450);
+            for (const chunk of chunks) {
+                const params = new URLSearchParams({
+                    q: chunk,
+                    langpair: `zh-CN|${targetLang}`,
+                    mt: '1'
+                });
+                const response = await gmRequest({
+                    method: 'GET',
+                    url: `https://api.mymemory.translated.net/get?${params.toString()}`,
+                    timeout: 15000
+                });
+                if (!response || response.status < 200 || response.status >= 300) {
+                    throw new Error(`MyMemory 返回状态 ${responseStatus(response)}`);
+                }
+                const data = JSON.parse(response.responseText);
+                const translation = data && data.responseData
+                    ? data.responseData.translatedText
+                    : null;
+                if (typeof translation !== 'string' || !translation.trim()) {
+                    throw new Error(data && data.responseDetails
+                        ? `MyMemory：${data.responseDetails}`
+                        : 'MyMemory 返回格式无效或译文为空');
+                }
+                translatedChunks.push(decodeTranslationEntities(translation));
+            }
+            return translatedChunks.join('').trim();
+        } catch (error) {
+            logError('MyMemory 请求失败', error);
+            return null;
+        }
+    }
+
     async function googleTranslate(text, targetLang) {
         try {
             const params = new URLSearchParams({
@@ -303,6 +525,14 @@
             logError('Google Translate 请求失败', error);
             return null;
         }
+    }
+
+    async function freeTranslate(text, targetLang) {
+        const myMemoryResult = await myMemoryTranslate(text, targetLang);
+        if (myMemoryResult) {
+            return myMemoryResult;
+        }
+        return googleTranslate(text, targetLang);
     }
 
     async function llmTranslate(text, targetLang, apiUrl, apiKey, model) {
@@ -356,9 +586,9 @@
                         settings.model
                     );
                 }
-                const translation = await googleTranslate(text, targetLang);
+                const translation = await freeTranslate(text, targetLang);
                 if (!translation) {
-                    throw new Error('Google Translate 未返回译文');
+                    throw new Error('免费翻译服务未返回译文');
                 }
                 return translation;
             } catch (error) {
@@ -423,7 +653,7 @@
 
     function getCacheKey(settings, chapterUrl = window.location.href) {
         const url = new URL(chapterUrl);
-        const engine = settings.engine === 'llm' ? 'llm' : 'google';
+        const engine = settings.engine === 'llm' ? 'llm' : 'free';
         return `cache_v2_${JSON.stringify([
             url.origin, url.pathname, url.search, settings.targetLang, engine,
             engine === 'llm' ? settings.apiUrl : '',
@@ -679,7 +909,7 @@
 
         const startedAt = Date.now();
         try {
-            const { container, segments } = await extractContentWithRetry(adapter, 3, 500);
+            const { container, segments } = await extractContentWithRetry(adapter, 10, 500);
             if (!container || !segments.length) {
                 setButtonState(button, DEFAULT_BUTTON_LABEL, false);
                 showToast('无法提取正文内容，页面结构可能已改版', 'error');
@@ -1271,7 +1501,7 @@
                 <p class="novel-translator-subtitle" id="novel-translator-settings-subtitle"></p>
                 <label class="novel-translator-label" for="novel-translator-engine">翻译引擎</label>
                 <select id="novel-translator-engine">
-                    <option value="google">Google 翻译（免费，无需密钥）</option>
+                    <option value="free">免费翻译（MyMemory，Google 备用）</option>
                     <option value="llm">OpenAI 兼容 API（更自然，需密钥）</option>
                 </select>
                 <label class="novel-translator-label" for="novel-translator-target-lang">目标语言</label>
@@ -1333,7 +1563,7 @@
         const updateVisibility = () => {
             const isLlm = engine.value === 'llm';
             llmFields.hidden = !isLlm;
-            subtitle.textContent = `v${SCRIPT_VERSION} · ${isLlm ? 'OpenAI 兼容 API' : 'Google 翻译'}`;
+            subtitle.textContent = `v${SCRIPT_VERSION} · ${isLlm ? 'OpenAI 兼容 API' : '免费翻译'}`;
         };
         engine.addEventListener('change', updateVisibility);
         autoNext.addEventListener('change', () => {
@@ -1354,7 +1584,7 @@
             const adapter = getMatchedAdapter();
             const wantAutoNext = autoNext.checked && adapter && typeof adapter.getNextUrl === 'function';
             const newSettings = {
-                engine: engine.value === 'llm' ? 'llm' : 'google',
+                engine: engine.value === 'llm' ? 'llm' : 'free',
                 targetLang: targetLang.value.trim() || DEFAULT_SETTINGS.targetLang,
                 apiUrl: apiUrl.value.trim() || DEFAULT_SETTINGS.apiUrl,
                 apiKey: apiKey.value.trim(),
