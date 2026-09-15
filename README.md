@@ -30,6 +30,13 @@ Pure front-end userscript — no build tools, backend services, or extra depende
 
 ## Installation (Tampermonkey)
 
+**One-click install** (install Tampermonkey first, then click a link below):
+
+- 📦 [**Install from jsDelivr CDN**](https://cdn.jsdelivr.net/gh/yuiiiii111/chinese-novel-translator@main/novel-translator.user.js) — **recommended**, reachable in most regions including mainland China
+- 📦 [Install from GitHub raw](https://raw.githubusercontent.com/yuiiiii111/chinese-novel-translator/main/novel-translator.user.js) — may need a proxy in some regions
+
+Or install manually:
+
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension.
 2. Open the Tampermonkey dashboard and choose **Create a new script** (添加新脚本).
 3. Copy the full content of `novel-translator.user.js` into the editor, replacing the default template.

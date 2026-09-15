@@ -30,6 +30,13 @@
 
 ## 安装方法（Tampermonkey）
 
+**一键安装**（需先安装 Tampermonkey，然后点击下面的链接）：
+
+- 📦 [**从 jsDelivr CDN 安装**](https://cdn.jsdelivr.net/gh/yuiiiii111/chinese-novel-translator@main/novel-translator.user.js) —— **推荐**，国内可直接访问，点击后 Tampermonkey 会弹出安装页
+- 📦 [从 GitHub raw 安装](https://raw.githubusercontent.com/yuiiiii111/chinese-novel-translator/main/novel-translator.user.js) —— 部分网络环境可能需要代理
+
+也可以手动安装：
+
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展。
 2. 打开 Tampermonkey 管理面板，选择“添加新脚本”。
 3. 将 `novel-translator.user.js` 的完整内容复制到编辑器中，覆盖默认模板。
