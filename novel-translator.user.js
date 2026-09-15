@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         小说翻译助手
 // @name:en      Chinese Novel Translator
-// @namespace    https://github.com/yuiiiii111/Git
+// @namespace    https://github.com/yuiiiii111/chinese-novel-translator
 // @version      0.2.3
 // @description  为了非母语为中文的英语用户，针对中文小说网站做的插件：在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言，支持免费翻译服务与 OpenAI 兼容 API。
 // @description:en A userscript for English speakers who are not native Chinese readers: one-click translation of chapter text on Chinese novel sites (Qidian, Jinjiang, Fanqie), powered by free translation services and OpenAI-compatible APIs.
 // @author       yuiiiii111
-// @homepageURL  https://github.com/yuiiiii111/Git
-// @supportURL   https://github.com/yuiiiii111/Git/issues
+// @homepageURL  https://github.com/yuiiiii111/chinese-novel-translator
+// @supportURL   https://github.com/yuiiiii111/chinese-novel-translator/issues
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232e9d57'/%3E%3Ctext x='16' y='22.5' font-size='17' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E8%AF%91%3C/text%3E%3C/svg%3E
 // @match        *://*.qidian.com/*
 // @match        *://*.jjwxc.net/*
