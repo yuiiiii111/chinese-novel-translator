@@ -1,145 +1,145 @@
-# 小说翻译助手（Novel Translator）
+# Novel Translator (小说翻译助手)
 
-**简体中文** | [**English**](README.en.md)
+[**简体中文**](README.zh-CN.md) | **English**
 
 ---
 
-> **为了非母语为中文的英语用户，针对中文小说网站做的插件。**
+> **A userscript built for English speakers who are not native Chinese readers — a translation plugin for Chinese novel websites.**
 >
-> 在起点中文网、晋江文学城、番茄小说等中文小说网站上，一键把章节正文翻译成你熟悉的语言（英语、日语、韩语……），直接显示在原文下方，方便对照阅读。
+> One click translates chapter text on Chinese web-novel sites (Qidian, Jinjiang, Fanqie and more) into a language you know (English, Japanese, Korean…), displayed right below the original text for side-by-side reading.
 
-一个面向 Tampermonkey 的浏览器用户脚本，通过站点适配器读取章节正文，调用免费翻译服务或 OpenAI 兼容的大语言模型接口完成翻译。翻译结果按站点、章节路径与查询参数、目标语言和引擎配置缓存在 Tampermonkey 存储中，重复翻译同一章节时可以直接使用缓存。
+A Tampermonkey userscript that reads chapter content through per-site adapters and translates it with free translation services or any OpenAI-compatible LLM API. Translations are cached by site, chapter path and query parameters, target language, and engine configuration in Tampermonkey storage, so translating the same chapter again can reuse its cache.
 
-本项目是一个纯前端用户脚本，不需要构建工具、后端服务或额外依赖。
+Pure front-end userscript — no build tools, backend services, or extra dependencies required.
 
-## 功能特性
+## Features
 
-- 支持起点中文网、晋江文学城和番茄小说。
-- 支持免费翻译和 OpenAI 兼容 API 两种翻译引擎。
-- 自动识别新版起点、晋江和番茄正文结构，并在翻译前还原番茄小说的字体混淆文字。
-- 按每批 5 段并发翻译并显示实时进度（如“翻译中 12/45”），单次请求超时 10 秒。
-- 翻译失败时自动重试一次；仍失败的段落会以红色节点标出，点击即可单独重译。
-- 缓存区分站点、章节参数、目标语言、引擎及大模型接口/模型，失败段重译成功后自动更新缓存。
-- 毛玻璃悬浮工具栏：可拖动（位置跨页记忆）、双击拖柄可收起为小圆点。
-- 译文可随时显示/隐藏（按钮或 `Alt+H`）；“仅显示译文”模式隐藏译文时会恢复原文。
-- 两种译文显示方式：逐段对照、仅显示译文。
-- 译文样式适配深色模式并带淡入动画，重复翻译前自动清理旧译文。
-- 所有提示使用页面内 Toast，不再弹出浏览器对话框。
-- 快捷键：`Alt+T` 翻译本章、`Alt+H` 显示/隐藏译文、`Alt+S` 打开设置。
-- 设置通过 Tampermonkey 持久化保存。
+- Supports Qidian (起点中文网), Jinjiang Literature City (晋江文学城), and Fanqie Novel (番茄小说).
+- Two translation engines: free translation and OpenAI-compatible APIs.
+- Recognizes current Qidian, Jinjiang, and Fanqie layouts and decodes Fanqie's obfuscated font text before translation.
+- Batches 5 paragraphs concurrently with a live progress indicator (e.g. "Translating 12/45"); 10 s request timeout.
+- Automatic one-time retry on failure; paragraphs that still fail turn into red clickable nodes — click one to retry that single paragraph.
+- Cache separated by site, chapter parameters, target language, engine, and LLM endpoint/model; a successful segment retry updates it automatically.
+- Frosted-glass floating toolbar: draggable (position remembered across pages), double-click the handle to collapse it into a small dot.
+- Toggle translations on/off anytime (button or `Alt+H`); hiding translations in translations-only mode restores the original text.
+- Two display modes: inline side-by-side, or translations-only (original hidden).
+- Translation styling follows dark mode, with a subtle fade-in animation; old translations are cleaned up before re-translating.
+- All feedback uses in-page toasts instead of browser dialogs.
+- Shortcuts: `Alt+T` translate chapter, `Alt+H` toggle translations, `Alt+S` open settings.
+- Settings persist via Tampermonkey storage.
 
-## 安装方法（Tampermonkey）
+## Installation (Tampermonkey)
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展。
-2. 打开 Tampermonkey 管理面板，选择“添加新脚本”。
-3. 将 `novel-translator.user.js` 的完整内容复制到编辑器中，覆盖默认模板。
-4. 保存脚本，并确认脚本开关处于启用状态。
-5. 打开支持的小说章节页面，页面右下角会出现绿色的“翻译本章”按钮。
+1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension.
+2. Open the Tampermonkey dashboard and choose **Create a new script** (添加新脚本).
+3. Copy the full content of `novel-translator.user.js` into the editor, replacing the default template.
+4. Save (Ctrl+S) and make sure the script switch is enabled.
+5. Open a supported chapter page — a green **🌐 Translate chapter** button appears at the bottom-right corner.
 
-如果浏览器或 Tampermonkey 提示跨域请求权限，请允许脚本访问翻译服务域名。使用大模型引擎时，还需要允许访问所配置的 API 域名。
+If the browser or Tampermonkey asks for cross-origin permission, allow the script to access the translation service domains. When using the LLM engine, also allow the API domain you configured.
 
-> 💡 英文读者请看 [English README](README.en.md)（installation & usage guide in English）。
+> 💡 中文用户请阅读[简体中文 README](README.zh-CN.md)。
 
-## 支持站点表
+## Supported Sites
 
-| 站点 | URL 匹配 | 正文选择器 | 处理方式 |
+| Site | URL pattern | Content selector | Handling |
 | --- | --- | --- | --- |
-| 起点中文网 | `www.qidian.com/chapter/*`、`read.qidian.com/chapter/*` | `.chapter-wrapper main.content`，兼容旧结构 | 按段落翻译（支持自动翻页） |
-| 晋江文学城 | `www.jjwxc.net`、`m.jjwxc.net` | `#paragraph_comment_content` 或移动版正文 | 按正文段落或换行拆分 |
-| 番茄小说 | `fanqienovel.com/reader/*` | `.muye-reader-content`，兼容旧结构 | 解码字体混淆后按段落翻译 |
+| Qidian (起点中文网) | `www.qidian.com/chapter/*`, `read.qidian.com/chapter/*` | `.chapter-wrapper main.content`, with legacy fallbacks | Per-paragraph (auto-next supported) |
+| Jinjiang (晋江文学城) | `www.jjwxc.net`, `m.jjwxc.net` | `#paragraph_comment_content` or mobile body | Paragraphs or line breaks |
+| Fanqie (番茄小说) | `fanqienovel.com/reader/*` | `.muye-reader-content`, with legacy fallback | Decode font obfuscation, then translate paragraphs |
 
-站点页面结构可能随网站改版而变化。如果按钮没有出现，通常是当前页面不符合适配器 URL 或正文选择器规则。
+Site markup may change over time. If the button does not appear, the page usually no longer matches the adapter URL or content selector.
 
-## 界面说明
+## Toolbar Guide
 
-页面右下角是悬浮工具栏，从左到右依次为：
+The floating toolbar at the bottom-right contains, from left to right:
 
-- `≡` 拖柄：按住可拖动工具栏（位置会记住），双击可收起/展开。
-- `🌐 翻译本章`：翻译整章，翻译中显示进度，完成后短暂显示统计。
-- `👁 / 🙈`：显示或隐藏译文（无译文时置灰）。
-- `⚙`：打开设置。
+- `≡` handle — drag to move the toolbar (position is remembered); double-click to collapse/expand.
+- `🌐 Translate chapter` — translates the whole chapter; shows progress while working and a short summary when done.
+- `👁 / 🙈` — show or hide translations (disabled until something is translated).
+- `⚙` — open settings.
 
-快捷键：`Alt+T` 翻译、`Alt+H` 显示/隐藏译文、`Alt+S` 设置。
+Shortcuts: `Alt+T` translate, `Alt+H` show/hide translations, `Alt+S` settings.
 
-## 翻译引擎配置说明
+## Engine Configuration
 
-点击右下角齿轮按钮（或按 `Alt+S`）即可打开设置面板。
+Open the settings panel with the gear button (or `Alt+S`).
 
-### 免费翻译
+### Free Translation
 
-- 引擎选择：`免费翻译（MyMemory，Google 备用）`
-- 目标语言：从下拉建议中选择，或直接输入语言代码，例如 `en`（英语）、`ja`（日语）、`ko`（韩语）或 `zh-CN`（简体中文）。
-- 不需要填写 API URL、API Key 和模型。
+- Engine: `免费翻译（MyMemory，Google 备用）` (free, no key required)
+- Target language: pick from the suggestion list or type a language code, e.g. `en` (English), `ja` (Japanese), `ko` (Korean), `de` (German).
+- No API URL, key, or model needed.
 
-脚本优先使用 MyMemory 免费接口，并在不可用时尝试 Google Translate。长段落会按 UTF-8 字节数拆分后发送；服务仍可能受访问频率或地区网络影响。
+The script uses MyMemory first and falls back to Google Translate when needed. Long paragraphs are split by UTF-8 byte length before sending. Availability can still be affected by rate limits or regional network conditions.
 
-### OpenAI 兼容 API
+### OpenAI-Compatible API
 
-- 引擎选择：`OpenAI 兼容 API（更自然，需密钥）`
-- 目标语言：选择或输入目标语言代码/名称。
-- API URL：填写完整的聊天补全接口地址，例如 `https://api.openai.com/v1/chat/completions`。
-- API Key：填写服务商提供的密钥（可点击眼睛图标临时显示明文）。密钥只保存在当前浏览器的 Tampermonkey 存储中。
-- 模型：填写服务商支持的模型名称，例如 `gpt-3.5-turbo`。
+- Engine: `OpenAI 兼容 API（更自然，需密钥）` (more natural results, requires a key)
+- Target language: pick or type a language code/name.
+- API URL: full chat-completions endpoint, e.g. `https://api.openai.com/v1/chat/completions`.
+- API Key: your provider key (click the eye icon to reveal it temporarily). The key is stored only in your browser's Tampermonkey storage.
+- Model: a model supported by your provider, e.g. `gpt-3.5-turbo`.
 
-脚本发送的提示词格式为：
+The prompt sent is:
 
 ```text
 请将以下内容翻译成[目标语言]，只返回译文：
 [文本]
 ```
 
-API 服务必须返回 OpenAI 兼容的 `choices[0].message.content` 字段。
+(That is: "Please translate the following content into [target language] and return only the translation.") The API must return OpenAI-compatible `choices[0].message.content`.
 
-### 译文显示方式
+### Display Mode
 
-- 逐段对照（默认）：译文显示在每段原文下方。
-- 仅显示译文：隐藏原文，只保留译文，适合阅读译文为主的场景。
+- Inline side-by-side (default): translation below each original paragraph.
+- Translations only: hides the original text and keeps just the translation — handy when you read mostly the translated version.
 
-### 自动翻译下一章
+### Auto-Translate Next Chapter
 
-勾选后，本章所有段落翻译成功才会自动跳转到下一章并继续翻译，直到章节末尾或关闭该选项。有失败段落时会停留在本章供你重试；修复失败后，再次点击“翻译本章”即可继续自动翻页。重新翻译会取消之前待执行的跳转。目前仅起点中文网章节页支持；番茄小说与晋江文学城页面该选项会置灰。
+When enabled, the script jumps to the next chapter only after every paragraph translates successfully, and continues until the last chapter or until you turn the option off. Failed paragraphs pause navigation so you can retry them. After fixing them, click **Translate chapter** again to resume auto-next. Starting another translation cancels the previous pending jump. Currently supported on Qidian chapter pages only; the checkbox is greyed out on Fanqie and Jinjiang pages.
 
-### 从 0.2.2 升级
+### Upgrading from 0.2.2
 
-将更新后的脚本覆盖到 Tampermonkey 中并保存，然后刷新章节页面。已有设置会保留；旧的 Google 免费引擎设置会自动迁移到新版免费翻译引擎。
+Replace the script in Tampermonkey, save, and refresh the chapter page. Existing settings are preserved, and the previous Google free-engine setting is migrated automatically.
 
-## 使用流程
+## Usage Flow
 
-1. 打开支持的章节页面。
-2. 点击“翻译本章”或按 `Alt+T`。
-3. 脚本识别正文并检查章节缓存。
-4. 未命中缓存时，按每批 5 段并发请求翻译服务，按钮显示实时进度。
-5. 译文显示在对应原文下方；失败的段落显示为红色“翻译失败，点击此处重试”，点击即可单独重试。
-6. 重新翻译或切换显示方式前会清除旧译文。
+1. Open a supported chapter page.
+2. Click **Translate chapter** or press `Alt+T`.
+3. The script detects the content and checks the chapter cache.
+4. On a cache miss, it requests translations in batches of 5 concurrent paragraphs while the button shows live progress.
+5. Translations appear under each paragraph; failed paragraphs show as red “翻译失败，点击此处重试” (failed — click to retry) nodes.
+6. Old translations are removed before re-translating or switching display modes.
 
-## 免责声明
+## Disclaimer
 
-本项目仅供学习、研究和个人辅助阅读使用。请遵守目标网站的服务条款、所在地区法律法规以及版权相关规定，不要绕过访问限制、批量抓取或传播受版权保护的内容。翻译结果由第三方服务生成，可能存在错误，不应视为专业翻译、出版内容或事实依据。
+This project is for learning, research, and personal reading assistance only. Please respect the terms of service of the target websites, your local laws, and copyright regulations — do not bypass access restrictions, scrape in bulk, or redistribute copyrighted content. Translations are generated by third-party services and may contain errors; they should not be treated as professional translation, published content, or factual sources.
 
-API Key 属于敏感信息。虽然脚本使用 Tampermonkey 存储保存设置，但浏览器扩展环境和第三方接口仍可能存在安全风险，请使用额度受限、权限适当的密钥，并自行承担使用第三方服务产生的费用与风险。
+API keys are sensitive. Although settings are stored via Tampermonkey storage, browser-extension environments and third-party endpoints still carry security risks. Use a key with limited quota and minimal permissions, and bear any fees or risks of third-party services yourself.
 
-## 贡献指南
+## Contributing
 
-欢迎提交问题反馈和适配器改进。
+Issues and adapter improvements are welcome.
 
-### 本地检查
+### Local Checks
 
-安装 Node.js 20 或更新版本后运行（无需安装依赖）：
+With Node.js 20 or newer installed, run (no dependencies required):
 
 ```sh
 node --check novel-translator.user.js
 node --test tests/translator.test.cjs
 ```
 
-回归测试使用模拟页面与翻译响应，不调用付费 API。真实站点页面结构、Tampermonkey 跨域权限和在线服务仍需在浏览器中验证。
+Regression tests use simulated pages and translation responses without calling paid APIs. Live site markup, Tampermonkey cross-origin permissions, and online services still require browser verification.
 
-### 添加新适配器
+### Adding a New Adapter
 
-在 `novel-translator.user.js` 的 `adapters` 数组中添加一个对象，至少包含：
+Add an object to the `adapters` array in `novel-translator.user.js`, minimally containing:
 
 ```javascript
 {
-    name: '示例站点',
+    name: 'Example site',
     match: /example\.com\/chapter\//i,
     getContent() {
         return Array.from(document.querySelectorAll('.chapter-content p'))
@@ -152,16 +152,16 @@ node --test tests/translator.test.cjs
 }
 ```
 
-`match` 用于判断当前 URL 是否由适配器处理；`getContent()` 返回包含 `element` 和 `text` 的正文片段；`getContainer()` 返回正文容器。对于没有独立段落元素的站点，可以让 `element` 为 `null`，脚本会把译文追加到正文容器末尾。
+`match` decides whether the current URL belongs to this adapter; `getContent()` returns content segments with `element` and `text`; `getContainer()` returns the content container. For sites without per-paragraph elements, let `element` be `null` and the script will append translations to the end of the container.
 
-提交前请至少检查：
+Before submitting, please verify at least:
 
-- URL 匹配不会误伤其他站点。
-- 正文选择器只读取小说正文。
-- 空段落、广告和导航内容不会被翻译。
-- 重复点击翻译按钮不会产生重复译文。
-- 免费翻译和 OpenAI 兼容 API 两种引擎都能正常工作。
+- The URL match does not accidentally catch other sites.
+- The content selector reads only the novel body.
+- Empty paragraphs, ads, and navigation content are not translated.
+- Repeated clicks on the translate button do not duplicate translations.
+- Both the free translation and OpenAI-compatible engines work.
 
-## MIT 许可证说明
+## MIT License
 
-本项目使用 MIT 许可证。你可以自由使用、复制、修改和分发，但需要保留原许可证和版权声明。完整条款请参见 [LICENSE](LICENSE)。
+This project is licensed under the MIT License. You are free to use, copy, modify, and distribute it as long as the original license and copyright notice are retained. See [LICENSE](LICENSE) for the full terms.
